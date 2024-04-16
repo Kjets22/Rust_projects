@@ -1,8 +1,10 @@
 use clap::error::Result;
 use clap::Parser;
 use linkify::{LinkFinder, Links};
-use std::fs::{self, read_to_string};
-use std::path::{Path, PathBuf};
+use std::{
+    fs::{self, read_to_string},
+    path::{Path, PathBuf},
+};
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Checks for broken links in a directory.", long_about = None)]
@@ -13,7 +15,7 @@ struct Args {
 }
 
 //takes a direcotry and opens it converts to content in the files and runs a method
-fn directory_to_file_action<F>(files: &Path, method: F) -> Result<()>
+fn directory_to_file_action<F>(files: &path, method: F) -> Result<()>
 where
     F: Fn(String),
 {
@@ -28,7 +30,8 @@ where
 fn find_links(content: String) {
     println!("in find links");
     let finder = LinkFinder::new();
-    let links = finder.links(&content);
+    let mut links = finder.links(&content);
+    let trying = links.nth(0);
     print_brokenlinks(links)
 }
 
