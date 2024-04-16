@@ -12,33 +12,19 @@ struct Args {
     broken_link_path: Option<PathBuf>,
 }
 
-//so what this does it takes a derectory and then opens its into each of its files
-//then it gets the contents of each file and sends it to a method
+//takes a direcotry and opens it converts to content in the files and runs a method
 fn directory_to_file_action<F>(files: &Path, method: F) -> Result<()>
-//here what i am doing taking a method as a parameter
 where
     F: Fn(String),
 {
-    //let files = fs::read_dir(files)?;
-    //result<ReadDir,Error>
-    //it return result with just the self without the error
-    //if files==eror
-    // return files
     let files = fs::read_dir(files)?;
     files
         .map(|file| method(read_to_string(file.unwrap().path()).unwrap()))
         .collect::<Vec<_>>();
     Ok(())
 }
-// fn directory_to_file_action(files: &Path) -> Result<()> {
-//     println!("in direcotry_file");
-//     let files = fs::read_dir(files)?;
-//     let _useless: Vec<_> = files
-//         .map(|file| find_links(read_to_string(file.unwrap().path()).unwrap()))
-//         .collect();
-//     Ok(())
-// }
 
+//find the links through the linkify crate
 fn find_links(content: String) {
     println!("in find links");
     let finder = LinkFinder::new();
@@ -46,6 +32,7 @@ fn find_links(content: String) {
     print_brokenlinks(links)
 }
 
+//takes the links and sees if they actualy go anywhere
 fn print_brokenlinks(links: Links) {
     println!("in print_brokenlinks");
     for link in links {
@@ -61,23 +48,10 @@ fn print_brokenlinks(links: Links) {
     }
 }
 
+//main method
 fn main() {
     let cli = Args::parse();
     if let Some(path) = cli.broken_link_path.as_deref() {
         directory_to_file_action(path, find_links);
     }
-    //let args = Args::parse();
-    //if let Some(broken_link_path) = args.broken_link_path.as_deref() {
-    //     let files = fs::read_dir(broken_link_path)?;
-    //     for file in files {
-    //         broken_links(file.path());
-    //     }
-    // }
-    //match args.broken_link_path{
-    //    println!("exist");
-    //}
-    //println!(
-    //    "print brokenlink {}",
-    //    args.broken_link_path.unwrap().display()
-    //);
 }
