@@ -1,0 +1,1 @@
+{"graph":[{"id":0,"title":"Node 0","links":[1,2]},{"id":1,"title":"Node 1","links":[0]},{"id":2,"title":"Node 2","links":[0]}]}
