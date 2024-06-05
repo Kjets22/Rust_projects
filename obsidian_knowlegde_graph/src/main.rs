@@ -1,5 +1,4 @@
 use eframe::egui;
-use rand::Rng; // This crate is for generating random numbers
 use serde::{Deserialize, Serialize};
 use std::f32;
 
@@ -38,29 +37,37 @@ impl KnowledgeGraphApp {
     }
 
     fn apply_force_directed_layout(&mut self) {
-        // Creates new positions for the nodes
         let width = 800.0; // Sets the width of the layout area
         let height = 600.0; // Sets the height of the layout area
-        let mut rng = rand::thread_rng(); // Creates a random number generator
 
-        // Initial random placement within the bounds
+        // Initial circular placement within the bounds
+        let angle_increment = 2.0 * std::f32::consts::PI / self.graph.len() as f32;
+        let radius = 200.0;
+
         self.positions = self
             .graph
             .iter()
-            .map(|_| {
-                let x = rng.gen_range(100.0..(width - 100.0)); // Ensures nodes are within bounds
-                let y = rng.gen_range(100.0..(height - 100.0)); // Ensures nodes are within bounds
+            .enumerate()
+            .map(|(i, _)| {
+                let angle = i as f32 * angle_increment;
+                let x = width / 2.0 + radius * angle.cos();
+                let y = height / 2.0 + radius * angle.sin();
                 egui::Pos2::new(x, y)
             })
             .collect();
 
-        let iterations = 100;
-        let k = (width * height / self.graph.len() as f32).sqrt();
+        let iterations = 1000; // Increased iterations
+        let k = (width * height / self.graph.len() as f32).sqrt() * 0.5;
+        let c = 0.01; // Small constant to control step size
 
         for _ in 0..iterations {
-            // Calculate repulsive forces
+            // Reset forces
             for i in 0..self.graph.len() {
                 self.forces[i] = egui::Vec2::ZERO;
+            }
+
+            // Calculate repulsive forces
+            for i in 0..self.graph.len() {
                 for j in 0..self.graph.len() {
                     if i != j {
                         let delta = self.positions[i] - self.positions[j];
@@ -85,7 +92,7 @@ impl KnowledgeGraphApp {
 
             // Update positions based on forces and keep nodes within bounds
             for i in 0..self.graph.len() {
-                self.positions[i] += self.forces[i] * 0.01; // Apply a small step
+                self.positions[i] += self.forces[i] * c; // Apply a small step
 
                 // Ensure nodes stay within bounds
                 self.positions[i].x = self.positions[i].x.clamp(50.0, width - 50.0);
