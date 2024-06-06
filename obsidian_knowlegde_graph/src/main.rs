@@ -1,4 +1,5 @@
 use eframe::egui;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::f32;
 
@@ -35,30 +36,26 @@ impl KnowledgeGraphApp {
             last_screen_size: egui::Vec2::new(800.0, 600.0), // Initial screen size
         } // Returns a new KnowledgeGraph
     }
-
-    fn apply_force_directed_layout(&mut self) {
+    fn apply_spring_layout(&mut self) {
         let width = 800.0; // Sets the width of the layout area
         let height = 600.0; // Sets the height of the layout area
 
-        // Initial circular placement within the bounds
-        let angle_increment = 2.0 * std::f32::consts::PI / self.graph.len() as f32;
-        let radius = 200.0;
-
+        // Initial random placement within the bounds
+        let mut rng = rand::thread_rng();
         self.positions = self
             .graph
             .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                let angle = i as f32 * angle_increment;
-                let x = width / 2.0 + radius * angle.cos();
-                let y = height / 2.0 + radius * angle.sin();
-                egui::Pos2::new(x, y)
+            .map(|_| {
+                egui::Pos2::new(
+                    rng.gen_range(100.0..width - 100.0),
+                    rng.gen_range(100.0..height - 100.0),
+                )
             })
             .collect();
 
-        let iterations = 1000; // Increased iterations
-        let k = (width * height / self.graph.len() as f32).sqrt() * 0.5;
-        let c = 0.01; // Small constant to control step size
+        let iterations = 5000; // Increased iterations
+        let k = (width * height / (self.graph.len() as f32)).sqrt() * 0.175; // Adjusted spring constant
+        let c = 0.005; // Smaller step size
 
         for _ in 0..iterations {
             // Reset forces
@@ -72,7 +69,7 @@ impl KnowledgeGraphApp {
                     if i != j {
                         let delta = self.positions[i] - self.positions[j];
                         let distance = delta.length().max(0.01); // Avoid division by zero
-                        let repulsive_force = (k * k / distance) * (1.0 / self.graph.len() as f32);
+                        let repulsive_force = (k * k) / distance * 1.5; // Increased multiplier for stronger repulsive force
                         self.forces[i] += delta.normalized() * repulsive_force;
                     }
                 }
@@ -83,18 +80,49 @@ impl KnowledgeGraphApp {
                 for &link in &node.links {
                     let delta = self.positions[node.id] - self.positions[link];
                     let distance = delta.length().max(0.01); // Avoid division by zero
-                    let attractive_force =
-                        (distance * distance / k) * (1.0 / self.graph.len() as f32);
+                    let attractive_force = (distance * distance) / k * 0.5;
                     self.forces[node.id] -= delta.normalized() * attractive_force;
                     self.forces[link] += delta.normalized() * attractive_force;
                 }
             }
 
-            // Update positions based on forces and keep nodes within bounds
+            // Update positions based on forces
             for i in 0..self.graph.len() {
-                self.positions[i] += self.forces[i] * c; // Apply a small step
+                self.positions[i] += self.forces[i] * c;
 
-                // Ensure nodes stay within bounds
+                // Ensure nodes do not overlap
+                for j in 0..self.graph.len() {
+                    if i != j {
+                        let delta = self.positions[i] - self.positions[j];
+                        let distance = delta.length().max(0.01); // Avoid division by zero
+                        let min_distance = 30.0; // Minimum distance between nodes to prevent overlap
+
+                        if distance < min_distance {
+                            let overlap_force = (min_distance - distance) * 0.5; // Adjust overlap force
+                            self.forces[i] += delta.normalized() * overlap_force;
+                            self.forces[j] -= delta.normalized() * overlap_force;
+                        }
+                    }
+                }
+
+                // Ensure nodes are not too close to links
+                for node in &self.graph {
+                    for &link in &node.links {
+                        if node.id != link {
+                            let delta = self.positions[node.id] - self.positions[link];
+                            let distance = delta.length().max(0.01); // Avoid division by zero
+                            let link_distance = 20.0; // Minimum distance to maintain from the link
+
+                            if distance < link_distance {
+                                let link_force = (link_distance - distance) * 0.5; // Adjust link force
+                                self.forces[node.id] += delta.normalized() * link_force;
+                                self.forces[link] -= delta.normalized() * link_force;
+                            }
+                        }
+                    }
+                }
+
+                // Keep nodes within bounds
                 self.positions[i].x = self.positions[i].x.clamp(50.0, width - 50.0);
                 self.positions[i].y = self.positions[i].y.clamp(50.0, height - 50.0);
             }
@@ -110,7 +138,7 @@ impl KnowledgeGraphApp {
         let scale_y = screen_size.y / self.last_screen_size.y;
 
         // Calculate the radius based on the number of nodes
-        let radius = (20.0 * self.zoom_factor) / ((self.graph.len() as f32).sqrt() / 2.0).max(1.0);
+        let radius = (30.0 * self.zoom_factor) / ((self.graph.len() as f32).sqrt() / 2.0).max(1.0);
 
         // Iterate over the nodes and draw them
         self.graph.iter().enumerate().for_each(|(i, node)| {
@@ -175,7 +203,7 @@ impl eframe::App for KnowledgeGraphApp {
             ui.heading("Knowledge Graph");
 
             if ui.button("Apply Layout").clicked() {
-                self.apply_force_directed_layout();
+                self.apply_spring_layout();
             }
 
             let screen_size = ui.available_size();
@@ -359,7 +387,7 @@ fn main() {
     ];
 
     let mut app = KnowledgeGraphApp::new(graph); // intilzes the knowledge map
-    app.apply_force_directed_layout(); // apply layout initially
+    app.apply_spring_layout(); // apply layout initially
     let native_options = eframe::NativeOptions::default(); // creates a native window
     eframe::run_native(
         "Knowledge Graph App",
