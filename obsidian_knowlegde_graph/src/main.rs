@@ -1,5 +1,11 @@
 use eframe::egui;
+use egui::Vec2;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 use std::{f32, fmt::Debug, time::Instant};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -7,7 +13,7 @@ struct LinkNode {
     id: usize,
     title: String,
     links: Vec<usize>,
-    color: [i32; 3],
+    color: [f32; 3],
 }
 
 impl LinkNode {
@@ -16,7 +22,7 @@ impl LinkNode {
             id,
             title,
             links,
-            color: [0, 0, 255],
+            color: [0.0, 0.0, 0.0],
         }
     }
 }
@@ -56,7 +62,8 @@ impl KnowledgeGraphApp {
 
     fn apply_spring_layout(&mut self) {
         let start_time = Instant::now(); // Start timing
-
+        let mut change = egui::Vec2::ZERO;
+        let mut lastcahnge = egui::Vec2::ZERO;
         let width = 800.0;
         let height = 600.0;
 
@@ -73,11 +80,14 @@ impl KnowledgeGraphApp {
             })
             .collect();
 
-        let iterations = 200 * self.graph.len();
+        let iterations = 1000 * self.graph.len();
         let k = (width * height / (self.graph.len() as f32)).sqrt() * 0.2;
         let c = 0.005;
-
-        for _ in 0..iterations {
+        let mut converged = false;
+        let mut number = 0;
+        while number != iterations && !converged {
+            // for mut number in 0..iterations {
+            number += 1;
             for i in 0..self.graph.len() {
                 self.forces[i] = egui::Vec2::ZERO;
             }
@@ -146,13 +156,27 @@ impl KnowledgeGraphApp {
                 }
 
                 self.positions[i] += self.forces[i] * c;
-
-                // Keep nodes within bounds (commented out as in the original)
+                change += self.forces[i];
+                // Keep nodes within bounds
                 // self.positions[i].x = self.positions[i].x.max(50.0).min(width - 50.0);
                 // self.positions[i].y = self.positions[i].y.max(50.0).min(height - 50.0);
             }
-        }
+            let totalchange1 = (lastcahnge[0].abs() - change[0].abs()).abs();
+            let totalchange2 = (lastcahnge[1].abs() - change[1].abs()).abs();
+            let sumtch = totalchange1 + totalchange2;
+            // println!(
+            //     "{:?}   {:?}    {:?}    {:?}  {}",
+            //     change[0], change[1], totalchange1, totalchange2, number
+            // );
 
+            if (sumtch > -0.0024 && sumtch < 0.0024) && sumtch != 0.0 {
+                println!("{:?}", sumtch);
+                converged = true;
+            }
+            lastcahnge = change;
+            change = egui::Vec2::ZERO;
+        }
+        println!("{:?}", change);
         let end_time = Instant::now(); // End timing
         self.layout_time = (end_time - start_time).as_secs_f64(); // Store the elapsed time
     }
@@ -164,7 +188,18 @@ impl KnowledgeGraphApp {
         let radius = (30.0 * self.zoom_factor) / ((self.graph.len() as f32).sqrt() / 3.0).max(1.0);
 
         self.graph.iter().enumerate().for_each(|(i, node)| {
+            let rgb_color = egui::Color32::from_rgb(
+                (node.color[0] * 355.0) as u8,
+                (node.color[1] * 355.0) as u8,
+                (node.color[2] * 355.0) as u8,
+            );
             let pos = self.positions[i].to_vec2();
+            ui.painter().circle(
+                pos.to_pos2(),
+                radius,
+                rgb_color,
+                egui::Stroke::new(2.0 * self.zoom_factor, egui::Color32::BLACK),
+            );
 
             node.links
                 .iter()
@@ -178,22 +213,16 @@ impl KnowledgeGraphApp {
                     })
                 })
                 .for_each(drop);
-
-            ui.painter().circle(
-                pos.to_pos2(),
-                radius,
-                egui::Color32::from_rgb(0, 0, 255),
-                egui::Stroke::new(2.0 * self.zoom_factor, egui::Color32::BLACK),
-            );
-
-            let font_id = egui::FontId::proportional(radius);
-            ui.painter().text(
-                pos.to_pos2(),
-                egui::Align2::CENTER_CENTER,
-                &node.title,
-                font_id,
-                egui::Color32::WHITE,
-            );
+            if radius > 15.0 {
+                let font_id = egui::FontId::proportional(radius);
+                ui.painter().text(
+                    pos.to_pos2(),
+                    egui::Align2::CENTER_CENTER,
+                    &node.title,
+                    font_id,
+                    egui::Color32::WHITE,
+                );
+            }
         });
 
         ui.painter()
@@ -222,6 +251,49 @@ impl KnowledgeGraphApp {
             .iter()
             .map(|&pos| (pos.to_vec2() + offset).to_pos2())
             .collect();
+    }
+
+    fn label_subgraphs(&mut self) {
+        let start_time = Instant::now();
+        let mut bluecol = 1.0;
+        let mut redcol = 0.1;
+        for i in 0..self.graph.len() {
+            if self.graph[i].color[2] == 0.0 {
+                self.dfs(i, bluecol, redcol);
+                bluecol *= 0.5;
+                redcol += 0.2;
+            }
+        }
+        let end_time = Instant::now(); // End timing
+        let duration = end_time - start_time;
+        println!(
+            "Time taken for labeling sub graphs: {} seconds",
+            duration.as_secs_f64()
+        );
+    }
+
+    fn dfs(&mut self, node_id: usize, col: f32, redcol: f32) {
+        // Collect the indices of the nodes you need to visit
+        let links_to_visit: Vec<usize> = {
+            let node = &self.graph[node_id];
+            node.links
+                .iter()
+                .filter_map(|&id| {
+                    if self.graph[id].color[2] == 0.0 {
+                        Some(id)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        // Iterate over the collected indices and modify the graph
+        for id in links_to_visit {
+            self.graph[id].color[0] = redcol;
+            self.graph[id].color[2] = col;
+            self.dfs(id, col, redcol);
+        }
     }
 }
 
@@ -389,8 +461,23 @@ fn main() {
         LinkNode::new(98, String::from("Node 98"), vec![65]),
         LinkNode::new(99, String::from("Node 99"), vec![65]),
     ];
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_flag_clone = Arc::clone(&stop_flag);
+
+    // Start the counting thread
+    thread::spawn(move || {
+        let mut seconds = 0;
+        while !stop_flag_clone.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_secs(1));
+            seconds += 1;
+            println!("{} second", seconds);
+        }
+    });
     let mut app = KnowledgeGraphApp::new(graph); // intilzes the knowledge map
+    let mut col = 1.0;
+    app.label_subgraphs();
     app.apply_spring_layout(); // apply layout initially
+    stop_flag.store(true, Ordering::SeqCst);
     let native_options = eframe::NativeOptions::default(); // creates a native window
     eframe::run_native(
         "Knowledge Graph App",
