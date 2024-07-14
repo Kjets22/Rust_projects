@@ -1,8 +1,7 @@
 use eframe::egui;
-use egui::Vec2;
-use rayon::prelude::*;
+
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -180,8 +179,8 @@ impl KnowledgeGraphApp {
 
     fn draw_graph(&mut self, ui: &mut egui::Ui, screen_size: egui::Vec2) {
         let center = screen_size / 2.0;
-        let scale_x = screen_size.x / self.last_screen_size.x;
-        let scale_y = screen_size.y / self.last_screen_size.y;
+        let _scale_x = screen_size.x / self.last_screen_size.x;
+        let _scale_y = screen_size.y / self.last_screen_size.y;
         let radius = (30.0 * self.zoom_factor) / ((self.graph.len() as f32).sqrt() / 3.0).max(1.0);
 
         self.graph.iter().enumerate().for_each(|(i, node)| {
@@ -471,7 +470,7 @@ fn main() {
         }
     });
     let mut app = KnowledgeGraphApp::new(graph); // intilzes the knowledge map
-    let mut col = 1.0;
+    let _col = 1.0;
     app.label_subgraphs();
     app.apply_spring_layout(); // apply layout initially
     stop_flag.store(true, Ordering::SeqCst);
