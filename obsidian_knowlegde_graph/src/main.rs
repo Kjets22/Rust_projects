@@ -2,6 +2,7 @@ use eframe::egui;
 use egui::Vec2;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -63,7 +64,7 @@ impl KnowledgeGraphApp {
     fn apply_spring_layout(&mut self) {
         let start_time = Instant::now(); // Start timing
         let mut change = egui::Vec2::ZERO;
-        let mut lastcahnge = egui::Vec2::ZERO;
+        let mut last_change = egui::Vec2::ZERO;
         let width = 800.0;
         let height = 600.0;
 
@@ -92,14 +93,12 @@ impl KnowledgeGraphApp {
                 self.forces[i] = egui::Vec2::ZERO;
             }
 
-            for i in 0..self.graph.len() {
-                for j in 0..self.graph.len() {
-                    if i != j {
-                        let delta = self.positions[i] - self.positions[j];
-                        let distance = delta.length().max(0.01);
-                        let repulsive_force = (k * k) / distance * (10.0 / (num_nodes * num_nodes));
-                        self.forces[i] += delta.normalized() * repulsive_force;
-                    }
+            for row in 0..self.graph.len() {
+                for col in row + 1..self.graph.len() {
+                    let delta = self.positions[row] - self.positions[col];
+                    let distance = delta.length().max(0.01);
+                    let repulsive_force = (k * k) / distance * (10.0 / (num_nodes * num_nodes));
+                    self.forces[row] += delta.normalized() * repulsive_force * 2.0;
                 }
             }
 
@@ -114,17 +113,15 @@ impl KnowledgeGraphApp {
             }
 
             for i in 0..self.graph.len() {
-                for j in 0..self.graph.len() {
-                    if i != j {
-                        let delta = self.positions[i] - self.positions[j];
-                        let distance = delta.length().max(0.01);
-                        let min_distance = 100.0;
+                for j in (i + 1)..self.graph.len() {
+                    let delta = self.positions[i] - self.positions[j];
+                    let distance = delta.length().max(0.01);
+                    let min_distance = 100.0;
 
-                        if distance < min_distance {
-                            let overlap_force = (min_distance - distance) * 0.5;
-                            self.forces[i] += delta.normalized() * overlap_force;
-                            self.forces[j] -= delta.normalized() * overlap_force;
-                        }
+                    if distance < min_distance {
+                        let overlap_force = (min_distance - distance) * 0.5;
+                        self.forces[i] += delta.normalized() * overlap_force * 2.0;
+                        self.forces[j] -= delta.normalized() * overlap_force * 2.0;
                     }
                 }
             }
@@ -161,8 +158,8 @@ impl KnowledgeGraphApp {
                 // self.positions[i].x = self.positions[i].x.max(50.0).min(width - 50.0);
                 // self.positions[i].y = self.positions[i].y.max(50.0).min(height - 50.0);
             }
-            let totalchange1 = (lastcahnge[0].abs() - change[0].abs()).abs();
-            let totalchange2 = (lastcahnge[1].abs() - change[1].abs()).abs();
+            let totalchange1 = (last_change[0].abs() - change[0].abs()).abs();
+            let totalchange2 = (last_change[1].abs() - change[1].abs()).abs();
             let sumtch = totalchange1 + totalchange2;
             // println!(
             //     "{:?}   {:?}    {:?}    {:?}  {}",
@@ -173,7 +170,7 @@ impl KnowledgeGraphApp {
                 println!("{:?}", sumtch);
                 converged = true;
             }
-            lastcahnge = change;
+            last_change = change;
             change = egui::Vec2::ZERO;
         }
         println!("{:?}", change);
@@ -483,5 +480,6 @@ fn main() {
         "Knowledge Graph App",
         native_options,
         Box::new(|_cc| Box::new(app)),
-    );
+    )
+    .unwrap();
 }
