@@ -3,16 +3,11 @@ mod data;
 use data::{data, Graph};
 use eframe::egui;
 
-use serde::{Deserialize, Serialize};
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use std::{f32, fmt::Debug, time::Instant};
-
-
-
+use std::{f32, time::Instant};
 
 #[derive(Default)]
 struct KnowledgeGraphApp {
