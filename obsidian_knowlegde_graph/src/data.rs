@@ -24,7 +24,7 @@ impl LinkNode {
     }
 }
 
-pub(crate) fn data() -> Vec<LinkNode> {
+pub(crate) fn data() -> Graph {
     let core = core();
     for file in core.list_metadatas().unwrap() {
         if file.is_document() && file.name.ends_with(".md") {
@@ -37,7 +37,7 @@ pub(crate) fn data() -> Vec<LinkNode> {
             // engineering "how do I detect a string"
             // level 2 complexity -- handle the 3 types of links in your data model
             // raw dog google.com, markdown link []() to an external site, md link to within
-            // lockbook (lb://file-id), md link that's relative (../todo.md). 
+            // lockbook (lb://file-id), md link that's relative (../todo.md).
             // parth will author some docuemntation about all the links types, ask me to do that
             // level 3 complexity -- given a destination how do you label it. for lockbook
             // documents file name is good, for external sites, what portion of the URL do you hang
