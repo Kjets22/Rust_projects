@@ -130,7 +130,7 @@ pub(crate) fn data() -> Graph {
     ]
 }
 
-pub(crate) fn data2() -> Graph {
+pub(crate) fn lockbookdata() -> Graph {
     let core = core();
     for file in core.list_metadatas().unwrap() {
         if file.is_document() && file.name.ends_with(".md") {

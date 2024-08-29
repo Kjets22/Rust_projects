@@ -1,6 +1,6 @@
 mod data;
 
-use data::{data, Graph};
+use data::{data, lockbookdata, Graph};
 use eframe::{egui, App, Frame};
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -358,7 +358,7 @@ impl eframe::App for KnowledgeGraphApp {
 }
 
 fn main() {
-    let graph = data();
+    let graph = lockbookdata();
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_flag_clone = Arc::clone(&stop_flag);
 
