@@ -1,6 +1,8 @@
 use std::env;
 
-use lb_rs::Core;
+use egui::Checkbox;
+use lb_rs::{Core, File};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 pub type Graph = Vec<LinkNode>;
@@ -11,6 +13,18 @@ pub struct LinkNode {
     pub title: String,
     pub links: Vec<usize>,
     pub color: [f32; 3],
+}
+
+#[derive(Clone)]
+pub struct Name_Id {
+    pub id: usize,
+    pub name: String,
+}
+
+impl Name_Id {
+    fn new(id: usize, name: String) -> Self {
+        Name_Id { id, name }
+    }
 }
 
 impl LinkNode {
@@ -131,12 +145,20 @@ pub(crate) fn data() -> Graph {
 }
 
 pub(crate) fn lockbookdata() -> Graph {
+    let mut graph: Graph = Vec::new();
+    let mut classify: Vec<Name_Id> = Vec::new();
     let core = core();
+    let mut id: usize = 1;
+    let mut num_linsk = 1;
     for file in core.list_metadatas().unwrap() {
         if file.is_document() && file.name.ends_with(".md") {
             let doc = core.read_document(file.id).unwrap();
             let doc = String::from_utf8(doc).unwrap();
-
+            let name = file.name;
+            let links = checkforlinks(&mut classify, &mut id, &doc);
+            num_linsk += links.len();
+            graph.push(LinkNode::new(in_classify(&name, &classify), name, links));
+            //let node_id=
             // todo for krish
             // add a function that detects links in strings
             // level 1 complexity -- use a regex or crate to detect strings (ask travis in
@@ -152,10 +174,86 @@ pub(crate) fn lockbookdata() -> Graph {
             // consider weighting the size of the node based on back references
             // consider an algorithm for data generation as well as data visualization that is
             // incremental
-            println!("{doc}");
+            //println!("{doc}");
+            //println!("{:?}", core.list_metadatas());
+            //println!("{:?}", core.get_account().unwrap());
         }
     }
-    todo!()
+    for item in classify.iter() {
+        let mut found = false;
+        let name = &item.name;
+        for link in &graph {
+            if name == &link.title {
+                found = true;
+            }
+        }
+        if !found {
+            graph.push(LinkNode::new(
+                in_classify(&item.name, &classify),
+                name.to_string(),
+                vec![],
+            ));
+        }
+    }
+    println!("{}", id);
+    println!("{}", num_linsk);
+
+    graph
+}
+// every time you finda  link and check it is in the classify if not make a new one
+// also make classify a hasmap so its easyier to search with a counter for the id so it knows what id to put
+// nm don't make it a haskmap it will make it much harder
+
+// one probleom that will need to fixed files can have same name if in diffrent folders
+// plan
+// make it so it is a for loop where when it finds a link it then goes to the link and class checklink
+// onn that data then for every link found i want it to call the springlayout function but with a delay of 0
+// so you see it get all the links should look nice
+fn checkforlinks(classify: &mut Vec<Name_Id>, id: &mut usize, doc: &str) -> Vec<usize> {
+    let mut links: Vec<usize> = Vec::new();
+    let link_names = find_links(doc);
+    //find all links and
+    for link in link_names {
+        let link_id = in_classify(&link, &classify);
+        if link_id == 0 {
+            classify.push(Name_Id::new(*id, link));
+            links.push(*id);
+            *id += 1;
+        } else {
+            links.push(link_id);
+        }
+    }
+    links
+}
+
+fn find_links(text: &str) -> Vec<String> {
+    // Regex pattern to match most common types of URLs
+    let url_pattern = r"(https?://|lb:)[^\s/$.?#].[^\s]*";
+    let re = Regex::new(url_pattern).unwrap();
+
+    // Collect all the matches into a Vec<String>
+    let links: Vec<String> = re
+        .find_iter(text)
+        .map(|mat| mat.as_str().to_string())
+        .collect();
+
+    // Print each link found
+    for link in &links {
+        println!("Found link: {}", link);
+    }
+
+    // Return the links
+    links
+}
+
+fn in_classify(name: &String, classify: &Vec<Name_Id>) -> usize {
+    let mut id: usize = 0;
+    for linkinfo in classify {
+        if &linkinfo.name == name {
+            id = linkinfo.id;
+        }
+    }
+    id
 }
 
 fn core() -> Core {

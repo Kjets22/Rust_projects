@@ -2,12 +2,19 @@ mod data;
 
 use data::{data, lockbookdata, Graph};
 use eframe::{egui, App, Frame};
+use egui::emath::Numeric;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::{f32, time::Instant};
+
+struct Grid {
+    cell_size: f32,
+    grid: HashMap<(i32, i32), Vec<usize>>, // Stores node indices in grid cells
+}
 
 #[derive(Default)]
 struct KnowledgeGraphApp {
@@ -27,6 +34,47 @@ struct KnowledgeGraphApp {
     change: egui::Vec2,
     last_change: egui::Vec2,
     running: bool,
+    wait: f64,
+}
+
+impl Grid {
+    fn new(cell_size: f32) -> Self {
+        Self {
+            cell_size,
+            grid: HashMap::new(),
+        }
+    }
+
+    fn insert_node(&mut self, pos: egui::Pos2, index: usize) {
+        let grid_pos = self.get_grid_pos(pos);
+        self.grid
+            .entry(grid_pos)
+            .or_insert_with(Vec::new)
+            .push(index);
+    }
+
+    fn get_grid_pos(&self, pos: egui::Pos2) -> (i32, i32) {
+        let x = (pos.x / self.cell_size).floor() as i32;
+        let y = (pos.y / self.cell_size).floor() as i32;
+        (x, y)
+    }
+
+    fn get_neighboring_cells(&self, pos: egui::Pos2) -> Vec<&Vec<usize>> {
+        let grid_pos = self.get_grid_pos(pos);
+        let mut neighboring_cells = Vec::new();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                if let Some(cell) = self.grid.get(&(grid_pos.0 + dx, grid_pos.1 + dy)) {
+                    neighboring_cells.push(cell);
+                }
+            }
+        }
+        neighboring_cells
+    }
+
+    fn clear(&mut self) {
+        self.grid.clear();
+    }
 }
 
 impl KnowledgeGraphApp {
@@ -49,7 +97,8 @@ impl KnowledgeGraphApp {
             iteration: 0,
             change: egui::Vec2::ZERO,
             last_change: egui::Vec2::ZERO,
-            running: false,
+            running: true,
+            wait: 100.0,
         }
     }
 
@@ -57,7 +106,7 @@ impl KnowledgeGraphApp {
         let width = 800.0;
         let height = 600.0;
         let num_nodes = self.graph.len() as f32;
-        let radius = (f32::min(width, height) / 2.0) - 50.0;
+        let radius = ((f32::min(width, height) / 2.0) - 50.0) * (num_nodes.sqrt() / 10.0); // Adjust based on number of nodes
         let angle_step = 2.0 * std::f32::consts::PI / num_nodes;
 
         self.positions = (0..num_nodes as usize)
@@ -72,118 +121,119 @@ impl KnowledgeGraphApp {
     }
 
     fn apply_spring_layout(&mut self) {
-        thread::sleep(Duration::from_millis(5));
-        self.graph_complete = false;
-        self.running = true;
-        self.iteration = self.iteration + 1;
-        // let start_time = Instant::now(); // Start timing
-        // let mut change = egui::Vec2::ZERO;
-        // let mut last_change = egui::Vec2::ZERO;
-        let width = 800.0;
-        let height = 600.0;
+        let width = 700.0;
+        let height = 500.0;
         let num_nodes = self.graph.len() as f32;
 
-        // let iterations = 1000 * self.graph.len();
-        let k = (width * height / (self.graph.len() as f32)).sqrt() * 0.2;
-        let c = 0.005;
-        // let mut number = 0;
+        // Define spring layout constants
+        let k_spring = 0.01; // Spring constant for attraction
+        let k_repel = 500.0; // Repulsion constant
+        let c = 0.01; // Damping factor to control movement
 
-        // while number != iterations && !converged {
-        //     number += 1;
+        // Limit the maximum movement per iteration
+        let max_movement = 50.0;
+
+        // Set up grid-based approximation
+        let cell_size = (width * height / num_nodes).sqrt();
+        let mut grid = Grid::new(cell_size);
+
+        // Insert nodes into the grid based on their positions
+        for (i, &pos) in self.positions.iter().enumerate() {
+            grid.insert_node(pos, i);
+        }
+
+        // Reset forces to zero before recalculating
         for i in 0..self.graph.len() {
             self.forces[i] = egui::Vec2::ZERO;
         }
 
-        for row in 0..self.graph.len() {
-            for col in row + 1..self.graph.len() {
-                let delta = self.positions[row] - self.positions[col];
-                let distance = delta.length().max(0.01);
-                let repulsive_force = (k * k) / distance * (10.0 / (num_nodes * num_nodes));
-                self.forces[row] += delta.normalized() * repulsive_force * 2.0;
+        // Calculate repulsive forces between all nodes
+        for i in 0..self.graph.len() {
+            let pos_i = self.positions[i];
+
+            // Get neighboring cells for the current node
+            for cell in grid.get_neighboring_cells(pos_i) {
+                for &j in cell {
+                    if i != j {
+                        let delta = self.positions[i] - self.positions[j];
+                        let distance = delta.length().max(0.01); // Avoid division by zero
+
+                        // Calculate repulsive force based on the distance between nodes
+                        let repulsive_force = (k_repel) / (distance * distance); // Repulsive force inversely proportional to distance
+                        let repulsion = delta.normalized() * repulsive_force;
+
+                        // Apply equal and opposite forces to both nodes
+                        self.forces[i] += repulsion;
+                        self.forces[j] -= repulsion;
+                    }
+                }
             }
         }
 
+        // Apply attractive forces between connected nodes
         for node in &self.graph {
             for &link in &node.links {
                 let delta = self.positions[node.id] - self.positions[link];
                 let distance = delta.length().max(0.01);
-                let attractive_force = (distance * distance) / k * 0.5;
-                self.forces[node.id] -= delta.normalized() * attractive_force;
-                self.forces[link] += delta.normalized() * attractive_force;
+
+                // Calculate attractive force between connected nodes
+                let attractive_force = k_spring * (distance * distance); // Spring-based attractive force
+                let attraction = delta.normalized() * attractive_force;
+
+                // Apply the attraction between connected nodes
+                self.forces[node.id] -= attraction;
+                self.forces[link] += attraction;
             }
         }
 
+        // Apply forces to update positions, but limit movement to avoid instability
         for i in 0..self.graph.len() {
-            for j in (i + 1)..self.graph.len() {
-                let delta = self.positions[i] - self.positions[j];
-                let distance = delta.length().max(0.01);
-                let min_distance = 100.0;
+            let force_magnitude = self.forces[i].length();
 
-                if distance < min_distance {
-                    let overlap_force = (min_distance - distance) * 0.5;
-                    self.forces[i] += delta.normalized() * overlap_force * 2.0;
-                    self.forces[j] -= delta.normalized() * overlap_force * 2.0;
-                }
-            }
+            // Limit the movement per iteration to avoid nodes moving too fast
+            let movement = if force_magnitude > max_movement {
+                self.forces[i] * (max_movement / force_magnitude)
+            } else {
+                self.forces[i]
+            };
+
+            self.positions[i] += movement * c;
+
+            // Removed the clamping to allow free movement beyond boundaries
+            // self.positions[i].x = self.positions[i].x.clamp(0.0, width);
+            // self.positions[i].y = self.positions[i].y.clamp(0.0, height);
         }
 
-        for i in 0..self.graph.len() {
-            for node in &self.graph {
-                for &link in &node.links {
-                    let a = self.positions[node.id];
-                    let b = self.positions[link];
-                    if node.id != i && link != i {
-                        let c = self.positions[i];
+        // Increment the iteration on every pass
+        self.iteration += 1;
 
-                        let ab = b - a;
-                        let ac = c - a;
-                        let t = ac.dot(ab) / ab.dot(ab);
+        // Check for convergence by monitoring the total change in position
+        let total_change = self.forces.iter().map(|f| f.length()).sum::<f32>();
 
-                        let t = t.clamp(0.0, 1.0);
-                        let closest_point = a + ab * t;
-                        let delta = c - closest_point;
-                        let distance = delta.length().max(0.01);
-                        let min_distance = 30.0;
-
-                        if distance < min_distance {
-                            let link_force = (min_distance - distance) * 0.5;
-                            self.forces[i] += delta.normalized() * link_force;
-                        }
-                    }
-                }
-            }
-
-            self.positions[i] += self.forces[i] * c;
-            self.change += self.forces[i];
-        }
-
-        let totalchange1 = (self.last_change[0].abs() - self.change[0].abs()).abs();
-        let totalchange2 = (self.last_change[1].abs() - self.change[1].abs()).abs();
-        let sumtch = totalchange1 + totalchange2;
-
-        if (sumtch > -0.0024 && sumtch < 0.0024) && sumtch != 0.0 {
-            println!("{:?}", sumtch);
+        if total_change < 20.0 || self.iteration >= 30000 {
+            // Updated to 1500.0 as per your request
+            // Mark graph as complete if no movement or reached iteration limit
             self.graph_complete = true;
             self.running = false;
-            println!("convered");
-            println!("{:?}", self.change);
         }
-        self.last_change = self.change;
-        self.change = egui::Vec2::ZERO;
 
-        // Redraw the UI to reflect the changes
-        //ctx.request_repaint();
-        //thread::sleep(Duration::from_millis(100));
-        //}
-        println!("running");
-        println!("{:?}", self.iteration);
-        // let end_time = Instant::now(); // End timing
-        // self.layout_time = (end_time - start_time).as_secs_f64(); // Store the elapsed time
-        // self.graph_complete = true;
+        println!(
+            "Iteration: {}, Total Change: {}",
+            self.iteration, total_change
+        );
+
+        // Clear the grid for the next iteration
+        grid.clear();
+
+        // Request another update if the layout is not complete
+        if !self.graph_complete {
+            // ctx.request_repaint();  // Uncomment if using a UI context like egui
+        }
     }
+
     fn draw_graph(&mut self, ui: &mut egui::Ui, screen_size: egui::Vec2) {
         let center = screen_size / 2.0;
-        let radius = (30.0 * self.zoom_factor) / ((self.graph.len() as f32).sqrt() / 3.0).max(1.0);
+        let radius = (15.0 * self.zoom_factor) / ((self.graph.len() as f32).sqrt() / 3.0).max(1.0);
 
         self.graph.iter().enumerate().for_each(|(i, node)| {
             let rgb_color = egui::Color32::from_rgb(
@@ -245,16 +295,21 @@ impl KnowledgeGraphApp {
     fn label_subgraphs(&mut self) {
         let mut bluecol = 1.0;
         let mut redcol = 0.1;
+        let mut greencol = 0.5;
+
         for i in 0..self.graph.len() {
             if self.graph[i].color[2] == 0.0 {
-                self.dfs(i, bluecol, redcol);
-                bluecol *= 0.5;
-                redcol += 0.2;
+                self.dfs(i, bluecol, redcol, greencol);
+
+                // Update color values in a way that keeps them within a visible range
+                bluecol = (bluecol * 0.7 + 0.2) % 1.0;
+                redcol = (redcol * 1.5 + 0.3) % 1.0;
+                greencol = (greencol * 1.3 + 0.4) % 1.0;
             }
         }
     }
 
-    fn dfs(&mut self, node_id: usize, col: f32, redcol: f32) {
+    fn dfs(&mut self, node_id: usize, col: f32, redcol: f32, greencol: f32) {
         let links_to_visit: Vec<usize> = {
             let node = &self.graph[node_id];
             node.links
@@ -269,10 +324,16 @@ impl KnowledgeGraphApp {
                 .collect()
         };
 
+        // Update the color of the current node
+        self.graph[node_id].color[0] = redcol;
+        self.graph[node_id].color[1] = greencol;
+        self.graph[node_id].color[2] = col;
+
         for id in links_to_visit {
             self.graph[id].color[0] = redcol;
+            self.graph[id].color[1] = greencol;
             self.graph[id].color[2] = col;
-            self.dfs(id, col, redcol);
+            self.dfs(id, col, redcol, greencol);
         }
     }
 }
@@ -310,48 +371,50 @@ impl eframe::App for KnowledgeGraphApp {
             if self.running {
                 self.debug = String::from("running");
             } else {
+                let start_time = Instant::now();
                 self.debug = String::from("done");
             }
         });
-
-        // Handle dragging and zooming (same as before)
-        let pointer = ctx.input(|i| i.pointer.clone());
-        if pointer.any_down() {
-            if let Some(current_pos) = pointer.interact_pos() {
-                if !self.is_dragging {
-                    self.is_dragging = true;
-                    self.last_drag_pos = Some(current_pos);
-                    // self.debug = String::from("clicked");
-                } else if let Some(last_pos) = self.last_drag_pos {
-                    // self.debug = String::from("dragged");
-                    let delta = current_pos - last_pos;
-                    self.draged(delta);
-                    self.last_drag_pos = Some(current_pos);
+        if !self.running {
+            // Handle dragging and zooming (same as before)
+            let pointer = ctx.input(|i| i.pointer.clone());
+            if pointer.any_down() {
+                if let Some(current_pos) = pointer.interact_pos() {
+                    if !self.is_dragging {
+                        self.is_dragging = true;
+                        self.last_drag_pos = Some(current_pos);
+                        // self.debug = String::from("clicked");
+                    } else if let Some(last_pos) = self.last_drag_pos {
+                        // self.debug = String::from("dragged");
+                        let delta = current_pos - last_pos;
+                        self.draged(delta);
+                        self.last_drag_pos = Some(current_pos);
+                    }
                 }
+            } else {
+                // self.debug = String::from("clicked");
+                self.is_dragging = false;
+                self.last_drag_pos = None;
             }
-        } else {
-            // self.debug = String::from("clicked");
-            self.is_dragging = false;
-            self.last_drag_pos = None;
-        }
 
-        if let Some(touches) = ctx.input(|i| i.multi_touch()) {
-            self.debug = touches.num_touches.to_string();
-        }
+            if let Some(touches) = ctx.input(|i| i.multi_touch()) {
+                self.debug = touches.num_touches.to_string();
+            }
 
-        let mut zoom = 1.0;
-        if ctx.input(|i| i.key_pressed(egui::Key::Equals)) {
-            self.zoom_factor *= 1.1;
-            zoom = 1.1;
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Minus)) {
-            self.zoom_factor *= 0.9;
-            zoom = 0.9;
-        }
-        if zoom != 1.0 {
-            if let Some(cursor) = ctx.input(|i| i.pointer.hover_pos()) {
-                self.cursor_loc = cursor.to_vec2();
-                self.zoomed(zoom);
+            let mut zoom = 1.0;
+            if ctx.input(|i| i.key_pressed(egui::Key::Equals)) {
+                self.zoom_factor *= 1.1;
+                zoom = 1.1;
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Minus)) {
+                self.zoom_factor *= 0.9;
+                zoom = 0.9;
+            }
+            if zoom != 1.0 {
+                if let Some(cursor) = ctx.input(|i| i.pointer.hover_pos()) {
+                    self.cursor_loc = cursor.to_vec2();
+                    self.zoomed(zoom);
+                }
             }
         }
     }
