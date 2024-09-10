@@ -4,7 +4,7 @@ use data::{data, lockbookdata, Graph};
 use eframe::{egui, App, Frame};
 use egui::emath::Numeric;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -105,16 +105,56 @@ impl KnowledgeGraphApp {
     fn initialize_positions(&mut self) {
         let width = 800.0;
         let height = 600.0;
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new(); // Create a VecDeque for BFS
+        let mut positions_map = HashMap::new(); // To store positions of nodes
+
+        // We start by placing the first node in the center
+        let start_node = 0; // You can start with any node
+        let center_x = width / 2.0;
+        let center_y = height / 2.0;
+
         let num_nodes = self.graph.len() as f32;
-        let radius = ((f32::min(width, height) / 2.0) - 50.0) * (num_nodes.sqrt() / 10.0); // Adjust based on number of nodes
+        let radius = ((f32::min(width, height) / 2.0) - 50.0) * (num_nodes.sqrt() / 10.0); // Adjust the radius based on the number of nodes
+
+        positions_map.insert(start_node, egui::Pos2::new(center_x, center_y));
+        queue.push_back(start_node); // Start BFS with the first node
+        visited.insert(start_node);
+
         let angle_step = 2.0 * std::f32::consts::PI / num_nodes;
 
-        self.positions = (0..num_nodes as usize)
+        while let Some(node_id) = queue.pop_front() {
+            let node_position = *positions_map.get(&node_id).unwrap();
+
+            // Get the links of the current node
+            let linked_nodes = &self.graph[node_id].links;
+
+            for (index, &linked_node) in linked_nodes.iter().enumerate() {
+                if visited.contains(&linked_node) {
+                    continue; // Skip already placed nodes
+                }
+
+                // Calculate the angle for placing the linked node
+                let angle = index as f32 * angle_step;
+
+                // Calculate the position of the linked node on the circle
+                let linked_x = center_x + radius * angle.cos();
+                let linked_y = center_y + radius * angle.sin();
+
+                // Place the linked node
+                positions_map.insert(linked_node, egui::Pos2::new(linked_x, linked_y));
+                visited.insert(linked_node);
+                queue.push_back(linked_node);
+            }
+        }
+
+        // Save the positions in a circular layout
+        self.positions = (0..self.graph.len())
             .map(|i| {
                 let angle = i as f32 * angle_step;
                 egui::Pos2::new(
-                    width / 2.0 + radius * angle.cos(),
-                    height / 2.0 + radius * angle.sin(),
+                    center_x + radius * angle.cos(),
+                    center_y + radius * angle.sin(),
                 )
             })
             .collect();

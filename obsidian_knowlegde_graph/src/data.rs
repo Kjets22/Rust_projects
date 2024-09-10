@@ -19,11 +19,12 @@ pub struct LinkNode {
 pub struct Name_Id {
     pub id: usize,
     pub name: String,
+    pub links: Vec<usize>,
 }
 
 impl Name_Id {
-    fn new(id: usize, name: String) -> Self {
-        Name_Id { id, name }
+    fn new(id: usize, name: String, links: Vec<usize>) -> Self {
+        Name_Id { id, name, links }
     }
 }
 
@@ -149,36 +150,32 @@ pub(crate) fn lockbookdata() -> Graph {
     let mut classify: Vec<Name_Id> = Vec::new();
     let core = core();
     let mut id: usize = 1;
-    let mut num_linsk = 1;
+    let mut num_links = 1;
+
     for file in core.list_metadatas().unwrap() {
         if file.is_document() && file.name.ends_with(".md") {
             let doc = core.read_document(file.id).unwrap();
             let doc = String::from_utf8(doc).unwrap();
             let name = file.name;
+            classify.push(Name_Id::new(id, name.clone(), vec![]));
+            id += 1;
+
+            // Check for links in the document
             let links = checkforlinks(&mut classify, &mut id, &doc);
-            num_linsk += links.len();
-            graph.push(LinkNode::new(in_classify(&name, &classify), name, links));
-            //let node_id=
-            // todo for krish
-            // add a function that detects links in strings
-            // level 1 complexity -- use a regex or crate to detect strings (ask travis in
-            // engineering "how do I detect a string"
-            // level 2 complexity -- handle the 3 types of links in your data model
-            // raw dog google.com, markdown link []() to an external site, md link to within
-            // lockbook (lb://file-id), md link that's relative (../todo.md).
-            // parth will author some docuemntation about all the links types, ask me to do that
-            // level 3 complexity -- given a destination how do you label it. for lockbook
-            // documents file name is good, for external sites, what portion of the URL do you hang
-            // on to? https://parth.cafe/, or https://parth.cafe/p/creating-a-sick-cli? How do you
-            // label these? (use the title?) imo as a first parth.cafe
-            // consider weighting the size of the node based on back references
-            // consider an algorithm for data generation as well as data visualization that is
-            // incremental
-            //println!("{doc}");
-            //println!("{:?}", core.list_metadatas());
-            //println!("{:?}", core.get_account().unwrap());
+            num_links += links.len();
+            add_links(links, &mut getName_Id(&name, &classify));
+            //getName_Id(&name, &classify).links = links.clone;
+
+            // Add the document as a node with its links
+            graph.push(LinkNode::new(
+                in_classify(&name, &classify),
+                name.clone(),
+                getName_Id(&name, &classify).links,
+            ));
         }
     }
+
+    // Add remaining links in classify to the graph if they don't exist
     for item in classify.iter() {
         let mut found = false;
         let name = &item.name;
@@ -191,39 +188,94 @@ pub(crate) fn lockbookdata() -> Graph {
             graph.push(LinkNode::new(
                 in_classify(&item.name, &classify),
                 name.to_string(),
-                vec![],
+                item.links.clone(),
             ));
         }
     }
-    println!("{}", id);
-    println!("{}", num_linsk);
+    ensure_bidirectional_links(&mut graph);
+
+    println!("Total IDs: {}", id);
+    println!("Total Links: {}", num_links);
+    println!("{:?}", graph);
 
     graph
 }
-// every time you finda  link and check it is in the classify if not make a new one
-// also make classify a hasmap so its easyier to search with a counter for the id so it knows what id to put
-// nm don't make it a haskmap it will make it much harder
 
-// one probleom that will need to fixed files can have same name if in diffrent folders
-// plan
-// make it so it is a for loop where when it finds a link it then goes to the link and class checklink
-// onn that data then for every link found i want it to call the springlayout function but with a delay of 0
-// so you see it get all the links should look nice
+fn ensure_bidirectional_links(nodes: &mut Vec<LinkNode>) {
+    // Iterate over all nodes
+    for i in 0..nodes.len() {
+        // For each link in the current node
+        let node_id = nodes[i].id;
+        let links = nodes[i].links.clone(); // Clone the links to avoid borrowing issues
+        for &linked_id in links.iter() {
+            // Find the linked node in the list of nodes
+            if let Some(linked_node) = nodes.iter_mut().find(|n| n.id == linked_id) {
+                // If the linked node doesn't already link back, add the reverse link
+                if !linked_node.links.contains(&node_id) {
+                    linked_node.links.push(node_id);
+                }
+            }
+        }
+    }
+}
+
+fn add_links(links: Vec<usize>, name_id: &mut Name_Id) {
+    for link in links {
+        name_id.links.push(link);
+    }
+}
+
 fn checkforlinks(classify: &mut Vec<Name_Id>, id: &mut usize, doc: &str) -> Vec<usize> {
     let mut links: Vec<usize> = Vec::new();
+    let node_id = *id - 1; // The current node ID
+
+    // Find all links in the document
     let link_names = find_links(doc);
-    //find all links and
+
     for link in link_names {
+        // Check if the link is already in classify
         let link_id = in_classify(&link, &classify);
+
         if link_id == 0 {
-            classify.push(Name_Id::new(*id, link));
+            // If link not found, add it
+            println!("New link found: {}", &link);
+            classify.push(Name_Id::new(*id, link.clone(), vec![node_id]));
             links.push(*id);
             *id += 1;
         } else {
-            links.push(link_id);
+            // Ensure no duplicate links
+            if !links.contains(&link_id) {
+                links.push(link_id);
+            }
+
+            // Add the current node ID to the list of links for this link
+            let name_id = getName_Id(&link, &classify);
+            if !name_id.links.contains(&node_id) {
+                getName_Id(&link, &classify).links.push(node_id);
+            }
+
+            // Now make the link bidirectional: if node_id is linked to link_id, then link_id should link back to node_id
+            if !getName_Id_by_id(link_id, classify).links.contains(&node_id) {
+                getName_Id_by_id(link_id, classify).links.push(node_id);
+            }
+
+            // Similarly, ensure node_id also links back to the link_id
+            if !getName_Id_by_id(node_id, classify).links.contains(&link_id) {
+                getName_Id_by_id(node_id, classify).links.push(link_id);
+            }
         }
     }
+
     links
+}
+
+fn getName_Id_by_id(id: usize, classify: &mut Vec<Name_Id>) -> &mut Name_Id {
+    for name in classify {
+        if name.id == id {
+            return name;
+        }
+    }
+    todo!();
 }
 
 fn find_links(text: &str) -> Vec<String> {
@@ -234,26 +286,62 @@ fn find_links(text: &str) -> Vec<String> {
     // Collect all the matches into a Vec<String>
     let links: Vec<String> = re
         .find_iter(text)
-        .map(|mat| mat.as_str().to_string())
+        .map(|mat| {
+            let url = mat.as_str().to_string();
+            // Extract the website name from the URL
+            extract_website_name(&url)
+        })
         .collect();
 
-    // Print each link found
+    // Print each website name found
     for link in &links {
-        println!("Found link: {}", link);
+        println!("Website name: {}", link);
     }
 
-    // Return the links
+    // Return the website names
     links
 }
 
+fn extract_website_name(url: &str) -> String {
+    // Remove "https://" or "http://" or "www." from the URL
+    let domain = url
+        .replace("https://", "")
+        .replace("http://", "")
+        .replace("www.", "");
+
+    // Split by slashes and get the first part, which is the domain
+    let parts: Vec<&str> = domain.split('/').collect();
+    let domain_name = parts[0];
+
+    // Get the base domain (youtube.com -> youtube) by splitting by dot and ignoring TLDs
+    let name_parts: Vec<&str> = domain_name.split('.').collect();
+    if name_parts.len() > 1 {
+        name_parts[name_parts.len() - 2].to_string() // Extracts the main domain part
+    } else {
+        domain_name.to_string() // Fallback if no dots found
+    }
+}
+
 fn in_classify(name: &String, classify: &Vec<Name_Id>) -> usize {
+    // Search for the link in the classify vector and return its ID if found
     let mut id: usize = 0;
     for linkinfo in classify {
         if &linkinfo.name == name {
             id = linkinfo.id;
+            break;
         }
     }
     id
+}
+
+fn getName_Id(name: &String, classify: &Vec<Name_Id>) -> Name_Id {
+    for item in classify {
+        if item.name == name.clone() {
+            return item.clone();
+        }
+    }
+    todo!();
+    //return;
 }
 
 fn core() -> Core {
