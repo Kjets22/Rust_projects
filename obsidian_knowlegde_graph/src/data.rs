@@ -13,9 +13,10 @@ pub struct LinkNode {
     pub title: String,
     pub links: Vec<usize>,
     pub color: [f32; 3],
+    pub cluster_id: Option<usize>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Name_Id {
     pub id: usize,
     pub name: String,
@@ -35,6 +36,7 @@ impl LinkNode {
             title,
             links,
             color: [0.0, 0.0, 0.0],
+            cluster_id: None,
         }
     }
 }
@@ -149,7 +151,7 @@ pub(crate) fn lockbookdata() -> Graph {
     let mut graph: Graph = Vec::new();
     let mut classify: Vec<Name_Id> = Vec::new();
     let core = core();
-    let mut id: usize = 1;
+    let mut id: usize = 0;
     let mut num_links = 1;
 
     for file in core.list_metadatas().unwrap() {
@@ -157,42 +159,34 @@ pub(crate) fn lockbookdata() -> Graph {
             let doc = core.read_document(file.id).unwrap();
             let doc = String::from_utf8(doc).unwrap();
             let name = file.name;
-            classify.push(Name_Id::new(id, name.clone(), vec![]));
-            id += 1;
+            classify.push(Name_Id::new(classify.len(), name.clone(), vec![]));
 
             // Check for links in the document
             let links = checkforlinks(&mut classify, &mut id, &doc);
+            id += 1;
             num_links += links.len();
             add_links(links, &mut getName_Id(&name, &classify));
             //getName_Id(&name, &classify).links = links.clone;
 
             // Add the document as a node with its links
-            graph.push(LinkNode::new(
-                in_classify(&name, &classify),
-                name.clone(),
-                getName_Id(&name, &classify).links,
-            ));
+            // graph.push(LinkNode::new(
+            //     in_classify(&name, &classify).unwrap(),
+            //     name.clone(),
+            //     getName_Id(&name, &classify).links,
+            // ));
         }
     }
 
     // Add remaining links in classify to the graph if they don't exist
     for item in classify.iter() {
-        let mut found = false;
-        let name = &item.name;
-        for link in &graph {
-            if name == &link.title {
-                found = true;
-            }
-        }
-        if !found {
-            graph.push(LinkNode::new(
-                in_classify(&item.name, &classify),
-                name.to_string(),
-                item.links.clone(),
-            ));
-        }
+        graph.push(LinkNode::new(
+            item.id,
+            item.name.to_string(),
+            item.links.clone(),
+        ));
     }
     ensure_bidirectional_links(&mut graph);
+    getnodes(&mut graph);
 
     println!("Total IDs: {}", id);
     println!("Total Links: {}", num_links);
@@ -226,8 +220,9 @@ fn add_links(links: Vec<usize>, name_id: &mut Name_Id) {
 }
 
 fn checkforlinks(classify: &mut Vec<Name_Id>, id: &mut usize, doc: &str) -> Vec<usize> {
+    println!("in checkforlinks");
     let mut links: Vec<usize> = Vec::new();
-    let node_id = *id - 1; // The current node ID
+    let node_id = *id; // The current node ID
 
     // Find all links in the document
     let link_names = find_links(doc);
@@ -236,18 +231,14 @@ fn checkforlinks(classify: &mut Vec<Name_Id>, id: &mut usize, doc: &str) -> Vec<
         // Check if the link is already in classify
         let link_id = in_classify(&link, &classify);
 
-        if link_id == 0 {
-            // If link not found, add it
-            println!("New link found: {}", &link);
-            classify.push(Name_Id::new(*id, link.clone(), vec![node_id]));
-            links.push(*id);
-            *id += 1;
-        } else {
+        if let Some(link_id) = link_id {
             // Ensure no duplicate links
             if !links.contains(&link_id) {
                 links.push(link_id);
             }
-
+            println!("{:?}", classify);
+            println!("the link id is {}", link_id);
+            println!("the node_id is  {}", node_id);
             // Add the current node ID to the list of links for this link
             let name_id = getName_Id(&link, &classify);
             if !name_id.links.contains(&node_id) {
@@ -263,13 +254,54 @@ fn checkforlinks(classify: &mut Vec<Name_Id>, id: &mut usize, doc: &str) -> Vec<
             if !getName_Id_by_id(node_id, classify).links.contains(&link_id) {
                 getName_Id_by_id(node_id, classify).links.push(link_id);
             }
+        } else {
+            *id += 1;
+            // If link not found, add it
+            println!("New link found: {}", &link);
+            classify.push(Name_Id::new(classify.len(), link.clone(), vec![node_id]));
+            links.push(*id);
+            // *id += 1;
         }
     }
 
     links
 }
 
+fn getnodes(graph: &mut Graph) -> &mut Graph {
+    let graph_len = graph.len();
+
+    // Iterate through all nodes in the graph
+    for node_index in 0..graph_len {
+        let node_id = graph[node_index].id;
+
+        // Create a temporary vector to hold the links that need to be added
+        let mut new_links = Vec::new();
+
+        // For each node, iterate through all other nodes
+        for other_index in 0..graph_len {
+            if node_index == other_index {
+                continue; // Skip the same node
+            }
+
+            let other_node = &graph[other_index]; // Immutable borrow for the other node
+
+            // If the other node contains a link to the current node, but the current node doesn't link back, mark it for addition
+            if other_node.links.contains(&node_id)
+                && !graph[node_index].links.contains(&other_node.id)
+            {
+                new_links.push(other_node.id);
+            }
+        }
+
+        // Now that we're done iterating, we can safely modify the links of the current node
+        graph[node_index].links.extend(new_links);
+    }
+
+    graph
+}
+
 fn getName_Id_by_id(id: usize, classify: &mut Vec<Name_Id>) -> &mut Name_Id {
+    println!("in getName_Id_by_id  the id trying to be found {}", id);
     for name in classify {
         if name.id == id {
             return name;
@@ -295,7 +327,7 @@ fn find_links(text: &str) -> Vec<String> {
 
     // Print each website name found
     for link in &links {
-        println!("Website name: {}", link);
+        //println!("Website name: {}", link);
     }
 
     // Return the website names
@@ -322,12 +354,13 @@ fn extract_website_name(url: &str) -> String {
     }
 }
 
-fn in_classify(name: &String, classify: &Vec<Name_Id>) -> usize {
+fn in_classify(name: &String, classify: &Vec<Name_Id>) -> Option<usize> {
     // Search for the link in the classify vector and return its ID if found
-    let mut id: usize = 0;
+    let mut id: Option<usize> = None;
     for linkinfo in classify {
         if &linkinfo.name == name {
-            id = linkinfo.id;
+            let optional_num: Option<usize> = Some(linkinfo.id);
+            id = optional_num;
             break;
         }
     }
