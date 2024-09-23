@@ -4,7 +4,9 @@ use data::{data, lockbookdata, Graph};
 use eframe::glow::{INFO_LOG_LENGTH, NOR};
 use eframe::{egui, App, Frame};
 use egui::emath::Numeric;
+use egui::style::Selection;
 use egui::Pos2;
+use rand::Rng;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -154,8 +156,7 @@ impl KnowledgeGraphApp {
             // Calculate the angle step between clusters to distribute them evenly
             let angle_step_clusters = 2.0 * std::f32::consts::PI / num_multi_clusters as f32;
             for (cluster_id, node_ids) in clusters {
-                let min_distance: f32 =
-                    2.0 * cluster_small_radius + buffer + ((node_ids.len() / 5) as f32); // Minimum chord distance between cluster centers
+                let min_distance: f32 = 2.0 * cluster_small_radius + buffer; // Minimum chord distance between cluster centers
                 let min_angle = 2.0 * (min_distance / (2.0 * main_circle_radius)).asin(); // Minimum angle in radians
 
                 // Total required angle for all multi-node clusters
@@ -180,8 +181,12 @@ impl KnowledgeGraphApp {
                 for node_id in node_ids {
                     let node_angle = count * angle_step_nodes;
                     let node_pos = Pos2::new(
-                        cluster_center.x + cluster_small_radius * node_angle.cos(),
-                        cluster_center.y + cluster_small_radius * node_angle.sin(),
+                        cluster_center.x
+                            + number_nodes as f32
+                            + cluster_small_radius * node_angle.cos(),
+                        cluster_center.y
+                            + number_nodes as f32
+                            + cluster_small_radius * node_angle.sin(),
                     );
                     positions_map.insert(node_id, node_pos);
                     count += 1.0;
@@ -196,12 +201,14 @@ impl KnowledgeGraphApp {
             let angle_step_outer = 2.0 * std::f32::consts::PI / total_outer_nodes as f32;
 
             for (i, &node_id) in unlinked_nodes.iter().enumerate() {
-                let angle = i as f32 * angle_step_outer;
-                let node_pos = Pos2::new(
-                    main_center.x + outer_circle_radius * angle.cos(),
-                    main_center.y + outer_circle_radius * angle.sin(),
-                );
-                positions_map.insert(node_id, node_pos);
+                let mut nocluster: Option<usize> = None;
+                self.graph[node_id].cluster_id = nocluster;
+                // let angle = i as f32 * angle_step_outer;
+                // let node_pos = Pos2::new(
+                //     main_center.x + outer_circle_radius * angle.cos(),
+                //     main_center.y + outer_circle_radius * angle.sin(),
+                // );
+                // positions_map.insert(node_id, node_pos);
             }
         }
 
@@ -218,7 +225,8 @@ impl KnowledgeGraphApp {
 
         // Define spring layout constants
         let k_spring = 0.01; // Spring constant for attraction
-        let k_repel = 500.0; // Repulsion constant
+        let k_repel = 1500.0; // Repulsion constant between nodes
+        let k_link_nudge = 0.005; // Small nudge constant for node-link interaction
         let c = 0.01; // Damping factor to control movement
 
         // Limit the maximum movement per iteration
@@ -250,7 +258,7 @@ impl KnowledgeGraphApp {
                         let distance = delta.length().max(0.01); // Avoid division by zero
 
                         // Calculate repulsive force based on the distance between nodes
-                        let repulsive_force = (k_repel) / (distance * distance); // Repulsive force inversely proportional to distance
+                        let repulsive_force = k_repel / (distance * distance);
                         let repulsion = delta.normalized() * repulsive_force;
 
                         // Apply equal and opposite forces to both nodes
@@ -268,7 +276,7 @@ impl KnowledgeGraphApp {
                 let distance = delta.length().max(0.01);
 
                 // Calculate attractive force between connected nodes
-                let attractive_force = k_spring * (distance * distance); // Spring-based attractive force
+                let attractive_force = k_spring * (distance * distance);
                 let attraction = delta.normalized() * attractive_force;
 
                 // Apply the attraction between connected nodes
@@ -276,6 +284,53 @@ impl KnowledgeGraphApp {
                 self.forces[link] += attraction;
             }
         }
+
+        // ** New code start **
+        // Apply weak random nudges to nodes close to link lines
+        for node in &self.graph {
+            let pos_node = self.positions[node.id];
+
+            // Iterate over all edges (links)
+            for other_node in &self.graph {
+                for &link in &other_node.links {
+                    // Skip if the node is part of the link
+                    if node.id == other_node.id || node.id == link {
+                        continue;
+                    }
+
+                    let pos_a = self.positions[other_node.id];
+                    let pos_b = self.positions[link];
+
+                    // Calculate the closest point on the line segment to the node
+                    let line_vec = pos_b - pos_a;
+                    let node_vec = pos_node - pos_a;
+
+                    let line_length_sq = line_vec.dot(line_vec).max(0.01); // Avoid division by zero
+                    let t = (node_vec.dot(line_vec) / line_length_sq).clamp(0.0, 1.0);
+                    let closest_point = pos_a + line_vec * t;
+
+                    let delta = pos_node - closest_point;
+                    let distance = delta.length().max(0.01); // Avoid division by zero
+
+                    // If the node is close to the link line, apply a weak random nudge
+                    if distance < cell_size * 0.5 {
+                        // Adjust the threshold as needed
+                        // Generate a small random direction vector
+                        let mut rng = rand::thread_rng();
+                        let angle: f32 = rng.gen_range(0.0..std::f32::consts::TAU);
+                        let random_direction = egui::Vec2::angled(angle);
+
+                        // Scale the nudge to be weaker than other forces
+                        let nudge_magnitude = k_link_nudge * distance;
+                        let nudge = random_direction * nudge_magnitude;
+
+                        // Apply the nudge to the node's force
+                        self.forces[node.id] += nudge;
+                    }
+                }
+            }
+        }
+        // ** New code end **
 
         // Apply forces to update positions, but limit movement to avoid instability
         for i in 0..self.graph.len() {
@@ -289,10 +344,6 @@ impl KnowledgeGraphApp {
             };
 
             self.positions[i] += movement * c;
-
-            // Removed the clamping to allow free movement beyond boundaries
-            // self.positions[i].x = self.positions[i].x.clamp(0.0, width);
-            // self.positions[i].y = self.positions[i].y.clamp(0.0, height);
         }
 
         // Increment the iteration on every pass
@@ -302,7 +353,6 @@ impl KnowledgeGraphApp {
         let total_change = self.forces.iter().map(|f| f.length()).sum::<f32>();
 
         if total_change < 20.0 || self.iteration >= 30000 {
-            // Updated to 1500.0 as per your request
             // Mark graph as complete if no movement or reached iteration limit
             self.graph_complete = true;
             self.running = false;
@@ -326,43 +376,66 @@ impl KnowledgeGraphApp {
         let center = screen_size / 2.0;
         let radius = (15.0 * self.zoom_factor) / ((self.graph.len() as f32).sqrt() / 3.0).max(1.0);
 
-        self.graph.iter().enumerate().for_each(|(i, node)| {
+        let base_size = radius;
+        let k = 1.0; // Adjust this constant to control the scaling
+
+        // First, draw all the links
+        for (i, node) in self.graph.iter().enumerate() {
+            if node.cluster_id.is_some() {
+                let pos = self.positions[i].to_vec2();
+
+                node.links
+                    .iter()
+                    .filter_map(|&link| {
+                        if let Some(&target_pos) = self.positions.get(link) {
+                            let target_pos = target_pos.to_vec2();
+                            Some(ui.painter().line_segment(
+                                [pos.to_pos2(), target_pos.to_pos2()],
+                                egui::Stroke::new(1.0 * self.zoom_factor, egui::Color32::GRAY),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                    .for_each(drop);
+            }
+        }
+
+        // Then, draw all the nodes on top of the links
+        for (i, node) in self.graph.iter().enumerate() {
             let rgb_color = egui::Color32::from_rgb(
-                (node.color[0] * 355.0) as u8,
-                (node.color[1] * 355.0) as u8,
-                (node.color[2] * 355.0) as u8,
-            );
-            let pos = self.positions[i].to_vec2();
-            ui.painter().circle(
-                pos.to_pos2(),
-                radius,
-                rgb_color,
-                egui::Stroke::new(2.0 * self.zoom_factor, egui::Color32::BLACK),
+                (node.color[0] * 255.0) as u8,
+                (node.color[1] * 255.0) as u8,
+                (node.color[2] * 255.0) as u8,
             );
 
-            node.links
-                .iter()
-                .filter_map(|&link| {
-                    self.positions.get(link).map(|&target_pos| {
-                        let target_pos = target_pos.to_vec2();
-                        ui.painter().line_segment(
-                            [pos.to_pos2(), target_pos.to_pos2()],
-                            egui::Stroke::new(1.0 * self.zoom_factor, egui::Color32::GRAY),
-                        );
-                    })
-                })
-                .for_each(drop);
-            if radius > 15.0 {
-                let font_id = egui::FontId::proportional(radius);
-                ui.painter().text(
+            let n = node.links.len() as f32;
+            let size = base_size + k * (n + 1.0).ln();
+
+            if node.cluster_id.is_some() {
+                let pos = self.positions[i].to_vec2();
+
+                // Draw the node circle
+                ui.painter().circle(
                     pos.to_pos2(),
-                    egui::Align2::CENTER_CENTER,
-                    &node.title,
-                    font_id,
-                    egui::Color32::WHITE,
+                    size,
+                    rgb_color,
+                    egui::Stroke::new(2.0 * self.zoom_factor, egui::Color32::BLACK),
                 );
+
+                // Draw the node title if the radius is large enough
+                if radius > 15.0 {
+                    let font_id = egui::FontId::proportional(radius);
+                    ui.painter().text(
+                        pos.to_pos2(),
+                        egui::Align2::CENTER_CENTER,
+                        &node.title,
+                        font_id,
+                        egui::Color32::WHITE,
+                    );
+                }
             }
-        });
+        }
 
         self.last_screen_size = screen_size;
     }
@@ -619,7 +692,7 @@ impl eframe::App for KnowledgeGraphApp {
 }
 
 fn main() {
-    let graph = data();
+    let graph = lockbookdata();
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_flag_clone = Arc::clone(&stop_flag);
 
