@@ -128,9 +128,9 @@ impl KnowledgeGraphApp {
 
         // Define radii
         let cluster_small_radius = 10.0; // Radius for arranging nodes within a cluster
-        let main_circle_radius = 300.0; // Radius of the main circle where multi-node clusters are placed
+        let main_circle_radius = 50.0; // Reduced radius of the main circle to bring clusters closer
         let outer_circle_radius = main_circle_radius + 100.0; // Radius for single-node clusters and unlinked nodes
-        let buffer = 5.0; // Additional buffer to prevent overlap between clusters
+        let buffer = 20.0; // Increased buffer to prevent overlap between clusters
 
         let mut positions_map = HashMap::new();
         let mut clusters: HashMap<Option<usize>, Vec<usize>> = HashMap::new();
@@ -138,8 +138,8 @@ impl KnowledgeGraphApp {
 
         // 1. Group nodes by cluster_id or mark as unlinked if cluster_id is None
         for node in &self.graph {
-            if node.links.len() == 0 {
-                unlinked_nodes.push(node.id)
+            if node.links.is_empty() {
+                unlinked_nodes.push(node.id);
             } else {
                 clusters
                     .entry(node.cluster_id)
@@ -147,46 +147,49 @@ impl KnowledgeGraphApp {
                     .push(node.id);
             }
         }
+
+        // 2. Identify the cluster with the most nodes
+        let mut largest_cluster_id: Option<usize> = None;
+        let mut largest_cluster_size: usize = 0;
+
+        for (cluster_id, node_ids) in &clusters {
+            if node_ids.len() > largest_cluster_size {
+                largest_cluster_size = node_ids.len();
+                largest_cluster_id = *cluster_id;
+            }
+        }
+
         // 3. Arrange multi-node clusters on the main circle
         let num_multi_clusters = clusters.len();
 
         if num_multi_clusters > 0 {
-            // Calculate the minimum angle between clusters to prevent overlap
-
             // Calculate the angle step between clusters to distribute them evenly
             let angle_step_clusters = 2.0 * std::f32::consts::PI / num_multi_clusters as f32;
+
             for (cluster_id, node_ids) in clusters {
-                let min_distance: f32 = 2.0 * cluster_small_radius + buffer; // Minimum chord distance between cluster centers
-                let min_angle = 2.0 * (min_distance / (2.0 * main_circle_radius)).asin(); // Minimum angle in radians
-
-                // Total required angle for all multi-node clusters
-                let total_required_angle = num_multi_clusters as f32 * min_angle;
-
-                // Check if the total required angle exceeds the full circle
-                if total_required_angle > 2.0 * std::f32::consts::PI {
-                    eprintln!("Warning: Not enough space on the main circle to arrange all multi-node clusters without overlap.");
-                    // Optionally, you can increase the main_circle_radius or reduce the number of clusters
-                }
-
                 let number_nodes = node_ids.len();
-                let angle: f32 = cluster_id.unwrap() as f32 * angle_step_clusters;
-
-                let cluster_center = Pos2::new(
-                    main_center.x + main_circle_radius * angle.cos(),
-                    main_center.y + main_circle_radius * angle.sin(),
-                );
                 let angle_step_nodes = 2.0 * std::f32::consts::PI / number_nodes as f32;
                 let mut count: f32 = 0.0;
+
+                // Determine if this is the largest cluster
+                let is_largest = Some(cluster_id.unwrap()) == largest_cluster_id;
+
+                // Set cluster_center based on whether it's the largest cluster
+                let cluster_center = if is_largest {
+                    main_center
+                } else {
+                    let angle = cluster_id.unwrap() as f32 * angle_step_clusters;
+                    Pos2::new(
+                        main_center.x + main_circle_radius * angle.cos(),
+                        main_center.y + main_circle_radius * angle.sin(),
+                    )
+                };
 
                 for node_id in node_ids {
                     let node_angle = count * angle_step_nodes;
                     let node_pos = Pos2::new(
-                        cluster_center.x
-                            + number_nodes as f32
-                            + cluster_small_radius * node_angle.cos(),
-                        cluster_center.y
-                            + number_nodes as f32
-                            + cluster_small_radius * node_angle.sin(),
+                        cluster_center.x + cluster_small_radius * node_angle.cos(),
+                        cluster_center.y + cluster_small_radius * node_angle.sin(),
                     );
                     positions_map.insert(node_id, node_pos);
                     count += 1.0;
@@ -222,159 +225,162 @@ impl KnowledgeGraphApp {
         let width = 700.0;
         let height = 500.0;
         let num_nodes = self.graph.len() as f32;
+        let len = (self.iteration as f32).sqrt();
+        // let len = (len.sqrt() as usize);
+        let len: usize = len as usize + 1;
+        for n in 0..len {
+            // Define spring layout constants
+            let k_spring = 0.008; // Reduced spring constant for weaker attraction
+            let k_repel = 10.0; // Repulsion constant between nodes
+            let k_link_nudge = 0.01; // Small nudge constant for node-link interaction
+            let c = 0.01; // Damping factor to control movement
 
-        // Define spring layout constants
-        let k_spring = 0.01; // Spring constant for attraction
-        let k_repel = 1500.0; // Repulsion constant between nodes
-        let k_link_nudge = 0.005; // Small nudge constant for node-link interaction
-        let c = 0.01; // Damping factor to control movement
+            // Limit the maximum movement per iteration
+            let max_movement = 100.0;
 
-        // Limit the maximum movement per iteration
-        let max_movement = 50.0;
+            // Set up grid-based approximation
+            let cell_size = (width * height / num_nodes).sqrt();
+            let mut grid = Grid::new(cell_size);
 
-        // Set up grid-based approximation
-        let cell_size = (width * height / num_nodes).sqrt();
-        let mut grid = Grid::new(cell_size);
+            // Insert nodes into the grid based on their positions
+            for (i, &pos) in self.positions.iter().enumerate() {
+                grid.insert_node(pos, i);
+            }
 
-        // Insert nodes into the grid based on their positions
-        for (i, &pos) in self.positions.iter().enumerate() {
-            grid.insert_node(pos, i);
-        }
+            // Reset forces to zero before recalculating
+            for i in 0..self.graph.len() {
+                self.forces[i] = egui::Vec2::ZERO;
+            }
 
-        // Reset forces to zero before recalculating
-        for i in 0..self.graph.len() {
-            self.forces[i] = egui::Vec2::ZERO;
-        }
+            // Calculate repulsive forces between all nodes
+            for i in 0..self.graph.len() {
+                let pos_i = self.positions[i];
 
-        // Calculate repulsive forces between all nodes
-        for i in 0..self.graph.len() {
-            let pos_i = self.positions[i];
+                // Get neighboring cells for the current node
+                for cell in grid.get_neighboring_cells(pos_i) {
+                    for &j in cell {
+                        if i != j {
+                            let delta = self.positions[i] - self.positions[j];
+                            let distance = delta.length().max(0.01); // Avoid division by zero
 
-            // Get neighboring cells for the current node
-            for cell in grid.get_neighboring_cells(pos_i) {
-                for &j in cell {
-                    if i != j {
-                        let delta = self.positions[i] - self.positions[j];
+                            // Calculate repulsive force based on the distance between nodes
+                            let repulsive_force = k_repel / (distance * distance / 20.0);
+                            let repulsion = delta.normalized() * repulsive_force;
+
+                            // Apply equal and opposite forces to both nodes
+                            self.forces[i] += repulsion;
+                            self.forces[j] -= repulsion;
+                        }
+                    }
+                }
+            }
+
+            // Apply attractive forces between connected nodes
+            for node in &self.graph {
+                for &link in &node.links {
+                    let delta = self.positions[node.id] - self.positions[link];
+                    let distance = delta.length().max(0.01);
+
+                    // **Modified Attractive Force Calculation**
+                    let attractive_force = k_spring * distance * (distance / 20.0) as f32; // Changed from distance^2 to distance
+                    let attraction = delta.normalized() * attractive_force;
+
+                    // Apply the attraction between connected nodes
+                    self.forces[node.id] -= attraction;
+                    self.forces[link] += attraction;
+                }
+            }
+
+            // **New code start **
+            // Apply weak random nudges to nodes close to link lines
+            // **New code end**
+
+            for node in &self.graph {
+                let pos_node = self.positions[node.id];
+
+                // Iterate over all edges (links)
+                for other_node in &self.graph {
+                    for &link in &other_node.links {
+                        // Skip if the node is part of the link
+                        if node.id == other_node.id || node.id == link {
+                            continue;
+                        }
+
+                        let pos_a = self.positions[other_node.id];
+                        let pos_b = self.positions[link];
+
+                        // Calculate the closest point on the line segment to the node
+                        let line_vec = pos_b - pos_a;
+                        let node_vec = pos_node - pos_a;
+
+                        let line_length_sq = line_vec.dot(line_vec).max(0.01); // Avoid division by zero
+                        let t = (node_vec.dot(line_vec) / line_length_sq).clamp(0.0, 1.0);
+                        let closest_point = pos_a + line_vec * t;
+
+                        let delta = pos_node - closest_point;
                         let distance = delta.length().max(0.01); // Avoid division by zero
 
-                        // Calculate repulsive force based on the distance between nodes
-                        let repulsive_force = k_repel / (distance * distance);
-                        let repulsion = delta.normalized() * repulsive_force;
+                        // If the node is close to the link line, apply a weak random nudge
+                        if distance < 30.0 {
+                            // Generate a small random direction vector
+                            let mut rng = rand::thread_rng();
+                            let angle: f32 = rng.gen_range(0.0..std::f32::consts::TAU);
+                            let random_direction = egui::Vec2::angled(angle);
 
-                        // Apply equal and opposite forces to both nodes
-                        self.forces[i] += repulsion;
-                        self.forces[j] -= repulsion;
+                            // Scale the nudge magnitude based on how close the node is
+                            let nudge_magnitude = k_link_nudge * (30.0 - distance);
+                            let nudge = random_direction * nudge_magnitude;
+
+                            // Apply the nudge to the node's force
+                            self.forces[node.id] += nudge;
+                        }
                     }
                 }
             }
-        }
+            // Apply forces to update positions, but limit movement to avoid instability
+            for i in 0..self.graph.len() {
+                let force_magnitude = self.forces[i].length();
 
-        // Apply attractive forces between connected nodes
-        for node in &self.graph {
-            for &link in &node.links {
-                let delta = self.positions[node.id] - self.positions[link];
-                let distance = delta.length().max(0.01);
+                // Limit the movement per iteration to avoid nodes moving too fast
+                let movement = if force_magnitude > max_movement {
+                    self.forces[i] * (max_movement / force_magnitude)
+                } else {
+                    self.forces[i]
+                };
 
-                // Calculate attractive force between connected nodes
-                let attractive_force = k_spring * (distance * distance);
-                let attraction = delta.normalized() * attractive_force;
-
-                // Apply the attraction between connected nodes
-                self.forces[node.id] -= attraction;
-                self.forces[link] += attraction;
+                self.positions[i] += movement * c;
             }
-        }
 
-        // ** New code start **
-        // Apply weak random nudges to nodes close to link lines
-        for node in &self.graph {
-            let pos_node = self.positions[node.id];
+            // Increment the iteration on every pass
+            self.iteration += 1;
 
-            // Iterate over all edges (links)
-            for other_node in &self.graph {
-                for &link in &other_node.links {
-                    // Skip if the node is part of the link
-                    if node.id == other_node.id || node.id == link {
-                        continue;
-                    }
+            // Check for convergence by monitoring the total change in position
+            let total_change = self.forces.iter().map(|f| f.length()).sum::<f32>();
 
-                    let pos_a = self.positions[other_node.id];
-                    let pos_b = self.positions[link];
-
-                    // Calculate the closest point on the line segment to the node
-                    let line_vec = pos_b - pos_a;
-                    let node_vec = pos_node - pos_a;
-
-                    let line_length_sq = line_vec.dot(line_vec).max(0.01); // Avoid division by zero
-                    let t = (node_vec.dot(line_vec) / line_length_sq).clamp(0.0, 1.0);
-                    let closest_point = pos_a + line_vec * t;
-
-                    let delta = pos_node - closest_point;
-                    let distance = delta.length().max(0.01); // Avoid division by zero
-
-                    // If the node is close to the link line, apply a weak random nudge
-                    if distance < cell_size * 0.5 {
-                        // Adjust the threshold as needed
-                        // Generate a small random direction vector
-                        let mut rng = rand::thread_rng();
-                        let angle: f32 = rng.gen_range(0.0..std::f32::consts::TAU);
-                        let random_direction = egui::Vec2::angled(angle);
-
-                        // Scale the nudge to be weaker than other forces
-                        let nudge_magnitude = k_link_nudge * distance;
-                        let nudge = random_direction * nudge_magnitude;
-
-                        // Apply the nudge to the node's force
-                        self.forces[node.id] += nudge;
-                    }
-                }
+            if total_change < 20.0 || self.iteration >= 250000 {
+                // Mark graph as complete if no movement or reached iteration limit
+                self.graph_complete = true;
+                self.running = false;
             }
-        }
-        // ** New code end **
 
-        // Apply forces to update positions, but limit movement to avoid instability
-        for i in 0..self.graph.len() {
-            let force_magnitude = self.forces[i].length();
+            // println!(
+            //     "Iteration: {}, Total Change: {}",
+            //     self.iteration, total_change
+            // );
 
-            // Limit the movement per iteration to avoid nodes moving too fast
-            let movement = if force_magnitude > max_movement {
-                self.forces[i] * (max_movement / force_magnitude)
-            } else {
-                self.forces[i]
-            };
+            // Clear the grid for the next iteration
+            grid.clear();
 
-            self.positions[i] += movement * c;
-        }
-
-        // Increment the iteration on every pass
-        self.iteration += 1;
-
-        // Check for convergence by monitoring the total change in position
-        let total_change = self.forces.iter().map(|f| f.length()).sum::<f32>();
-
-        if total_change < 20.0 || self.iteration >= 30000 {
-            // Mark graph as complete if no movement or reached iteration limit
-            self.graph_complete = true;
-            self.running = false;
-        }
-
-        println!(
-            "Iteration: {}, Total Change: {}",
-            self.iteration, total_change
-        );
-
-        // Clear the grid for the next iteration
-        grid.clear();
-
-        // Request another update if the layout is not complete
-        if !self.graph_complete {
-            // ctx.request_repaint();  // Uncomment if using a UI context like egui
+            // Request another update if the layout is not complete
+            if !self.graph_complete {
+                // ctx.request_repaint();  // Uncomment if using a UI context like egui
+            }
         }
     }
 
     fn draw_graph(&mut self, ui: &mut egui::Ui, screen_size: egui::Vec2) {
         let center = screen_size / 2.0;
-        let radius = (15.0 * self.zoom_factor) / ((self.graph.len() as f32).sqrt() / 3.0).max(1.0);
+        let radius = (15.0) / ((self.graph.len() as f32).sqrt() / 3.0).max(1.0);
 
         let base_size = radius;
         let k = 1.0; // Adjust this constant to control the scaling
@@ -410,7 +416,7 @@ impl KnowledgeGraphApp {
             );
 
             let n = node.links.len() as f32;
-            let size = base_size + k * (n + 1.0).ln();
+            let size = base_size + k * (n + 2.0).sqrt() * self.zoom_factor;
 
             if node.cluster_id.is_some() {
                 let pos = self.positions[i].to_vec2();
@@ -424,8 +430,8 @@ impl KnowledgeGraphApp {
                 );
 
                 // Draw the node title if the radius is large enough
-                if radius > 15.0 {
-                    let font_id = egui::FontId::proportional(radius);
+                if size > 15.0 {
+                    let font_id = egui::FontId::proportional(size);
                     ui.painter().text(
                         pos.to_pos2(),
                         egui::Align2::CENTER_CENTER,
@@ -630,6 +636,7 @@ impl eframe::App for KnowledgeGraphApp {
             } else if !self.graph_complete {
                 // Apply the spring layout
                 self.apply_spring_layout();
+                println!("iteration {}", self.iteration);
             }
 
             // Always draw the graph, even as it updates
