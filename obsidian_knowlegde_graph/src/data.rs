@@ -1,5 +1,6 @@
 use std::env;
 
+use eframe::glow::FALSE;
 use egui::Checkbox;
 use lb_rs::{Core, File};
 use regex::Regex;
@@ -7,13 +8,14 @@ use serde::{Deserialize, Serialize};
 
 pub type Graph = Vec<LinkNode>;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LinkNode {
     pub id: usize,
     pub title: String,
     pub links: Vec<usize>,
     pub color: [f32; 3],
     pub cluster_id: Option<usize>,
+    pub internal: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -21,11 +23,17 @@ pub struct Name_Id {
     pub id: usize,
     pub name: String,
     pub links: Vec<usize>,
+    pub internal: bool,
 }
 
 impl Name_Id {
     fn new(id: usize, name: String, links: Vec<usize>) -> Self {
-        Name_Id { id, name, links }
+        Name_Id {
+            id,
+            name,
+            links,
+            internal: true,
+        }
     }
 }
 
@@ -37,6 +45,7 @@ impl LinkNode {
             links,
             color: [0.0, 0.0, 0.0],
             cluster_id: None,
+            internal: true,
         }
     }
 }
@@ -159,13 +168,15 @@ pub(crate) fn lockbookdata() -> Graph {
             let doc = core.read_document(file.id).unwrap();
             let doc = String::from_utf8(doc).unwrap();
             let name = file.name;
-            classify.push(Name_Id::new(classify.len(), name.clone(), vec![]));
+            //classify.push(Name_Id::new(classify.len(), name.clone(), vec![]));
 
             // Check for links in the document
             let links = checkforlinks(&mut classify, &mut id, &doc);
             id += 1;
             num_links += links.len();
-            add_links(links, &mut getName_Id(&name, &classify));
+            classify.push(Name_Id::new(classify.len(), name.clone(), links));
+            //add_links(links, &mut getName_Id(&name, &classify));
+            println!("{:?}", getName_Id(&name, &classify));
             //getName_Id(&name, &classify).links = links.clone;
 
             // Add the document as a node with its links
@@ -179,20 +190,41 @@ pub(crate) fn lockbookdata() -> Graph {
 
     // Add remaining links in classify to the graph if they don't exist
     for item in classify.iter() {
-        graph.push(LinkNode::new(
-            item.id,
-            item.name.to_string(),
-            item.links.clone(),
-        ));
-    }
-    ensure_bidirectional_links(&mut graph);
-    getnodes(&mut graph);
+        let links = item.links.clone();
+        if (item.links.contains(&item.id)) {
+            let links = remove(links, &item.id);
 
-    println!("Total IDs: {}", id);
-    println!("Total Links: {}", num_links);
+            graph.push(LinkNode::new(item.id, item.name.to_string(), links));
+        } else {
+            graph.push(LinkNode::new(
+                item.id,
+                item.name.to_string(),
+                item.links.clone(),
+            ));
+        }
+    }
+    //ensure_bidirectional_links(&mut graph);
+    //getnodes(&mut graph);
+
+    // println!("Total IDs: {}", id);
+    // println!("Total Links: {}", num_links);
     println!("{:?}", graph);
 
     graph
+}
+
+fn remove(links: Vec<usize>, id: &usize) -> Vec<usize> {
+    let mut output = links.clone();
+    let mut index = 0;
+    let mut count = 0;
+    for link in links {
+        if &link == id {
+            index = count;
+            output.remove(index);
+        }
+        count += 1;
+    }
+    return output;
 }
 
 fn ensure_bidirectional_links(nodes: &mut Vec<LinkNode>) {
@@ -220,7 +252,6 @@ fn add_links(links: Vec<usize>, name_id: &mut Name_Id) {
 }
 
 fn checkforlinks(classify: &mut Vec<Name_Id>, id: &mut usize, doc: &str) -> Vec<usize> {
-    println!("in checkforlinks");
     let mut links: Vec<usize> = Vec::new();
     let node_id = *id; // The current node ID
 
@@ -236,28 +267,28 @@ fn checkforlinks(classify: &mut Vec<Name_Id>, id: &mut usize, doc: &str) -> Vec<
             if !links.contains(&link_id) {
                 links.push(link_id);
             }
-            println!("{:?}", classify);
-            println!("the link id is {}", link_id);
-            println!("the node_id is  {}", node_id);
-            // Add the current node ID to the list of links for this link
+            //println!("{:?}", classify);
+            //println!("the link id is {}", link_id);
+            //println!("the node_id is  {}", node_id);
+            //Add the current node ID to the list of links for this link
             let name_id = getName_Id(&link, &classify);
             if !name_id.links.contains(&node_id) {
                 getName_Id(&link, &classify).links.push(node_id);
             }
 
-            // Now make the link bidirectional: if node_id is linked to link_id, then link_id should link back to node_id
-            if !getName_Id_by_id(link_id, classify).links.contains(&node_id) {
-                getName_Id_by_id(link_id, classify).links.push(node_id);
-            }
+            // //Now make the link bidirectional: if node_id is linked to link_id, then link_id should link back to node_id
+            // if !getName_Id_by_id(link_id, classify).links.contains(&node_id) {
+            //     getName_Id_by_id(link_id, classify).links.push(node_id);
+            // }
 
-            // Similarly, ensure node_id also links back to the link_id
-            if !getName_Id_by_id(node_id, classify).links.contains(&link_id) {
-                getName_Id_by_id(node_id, classify).links.push(link_id);
-            }
+            // // Similarly, ensure node_id also links back to the link_id
+            // if !getName_Id_by_id(node_id, classify).links.contains(&link_id) {
+            //     getName_Id_by_id(node_id, classify).links.push(link_id);
+            // }
         } else {
             *id += 1;
             // If link not found, add it
-            println!("New link found: {}", &link);
+            //println!("New link found: {}", &link);
             classify.push(Name_Id::new(classify.len(), link.clone(), vec![node_id]));
             links.push(*id);
             // *id += 1;
@@ -301,7 +332,7 @@ fn getnodes(graph: &mut Graph) -> &mut Graph {
 }
 
 fn getName_Id_by_id(id: usize, classify: &mut Vec<Name_Id>) -> &mut Name_Id {
-    println!("in getName_Id_by_id  the id trying to be found {}", id);
+    //println!("in getName_Id_by_id  the id trying to be found {}", id);
     for name in classify {
         if name.id == id {
             return name;

@@ -4,8 +4,9 @@ use data::{data, lockbookdata, Graph};
 use eframe::glow::{INFO_LOG_LENGTH, NOR};
 use eframe::{egui, App, Frame};
 use egui::emath::Numeric;
+use egui::epaint::Shape;
 use egui::style::Selection;
-use egui::Pos2;
+use egui::{Color32, Painter, Pos2, Stroke, Vec2};
 use rand::Rng;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -28,6 +29,7 @@ struct KnowledgeGraphApp {
     positions: Vec<egui::Pos2>,
     forces: Vec<egui::Vec2>,
     zoom_factor: f32,
+    pan: Vec2,
     last_screen_size: egui::Vec2,
     cursor_loc: egui::Vec2,
     debug: String,
@@ -41,6 +43,7 @@ struct KnowledgeGraphApp {
     last_change: egui::Vec2,
     running: bool,
     wait: f64,
+    directional_links: HashMap<usize, Vec<usize>>,
 }
 
 impl Grid {
@@ -92,6 +95,7 @@ impl KnowledgeGraphApp {
             positions,
             forces,
             zoom_factor: 1.0,
+            pan: Vec2::ZERO,
             last_screen_size: egui::Vec2::new(800.0, 600.0),
             cursor_loc: egui::Vec2::ZERO,
             debug: String::from("no single touch"),
@@ -105,9 +109,29 @@ impl KnowledgeGraphApp {
             last_change: egui::Vec2::ZERO,
             running: true,
             wait: 100.0,
+            directional_links: HashMap::new(),
         }
     }
 
+    fn build_directional_links(&mut self) {
+        let mut directional_links = HashMap::new();
+
+        for node in &self.graph {
+            let mut directional = Vec::new();
+            for &link in &node.links {
+                // Ensure the link index is within bounds
+                if link < self.graph.len() {
+                    // Check if the linked node does NOT link back to the current node
+                    if !self.graph[link].links.contains(&node.id) {
+                        directional.push(link);
+                    }
+                }
+            }
+            directional_links.insert(node.id, directional);
+        }
+
+        self.directional_links = directional_links;
+    }
     /// Initializes the positions of all nodes in the graph based on their cluster assignments.
     /// - Clusters are arranged on a main circle with sufficient spacing to prevent overlap.
     /// - Nodes within each cluster are arranged in a small circle of radius 10.
@@ -230,8 +254,8 @@ impl KnowledgeGraphApp {
         let len: usize = len as usize + 1;
         for n in 0..len {
             // Define spring layout constants
-            let k_spring = 0.008; // Reduced spring constant for weaker attraction
-            let k_repel = 10.0; // Repulsion constant between nodes
+            let k_spring = 0.001; // Reduced spring constant for weaker attraction
+            let k_repel = 1.0; // Repulsion constant between nodes
             let k_link_nudge = 0.01; // Small nudge constant for node-link interaction
             let c = 0.01; // Damping factor to control movement
 
@@ -379,65 +403,99 @@ impl KnowledgeGraphApp {
     }
 
     fn draw_graph(&mut self, ui: &mut egui::Ui, screen_size: egui::Vec2) {
-        let center = screen_size / 2.0;
+        let center = Pos2::new(screen_size.x / 2.0, screen_size.y / 2.0);
         let radius = (15.0) / ((self.graph.len() as f32).sqrt() / 3.0).max(1.0);
 
         let base_size = radius;
         let k = 1.0; // Adjust this constant to control the scaling
 
-        // First, draw all the links
-        for (i, node) in self.graph.iter().enumerate() {
-            if node.cluster_id.is_some() {
-                let pos = self.positions[i].to_vec2();
+        // Precompute node sizes
+        let node_sizes: Vec<f32> = self
+            .graph
+            .iter()
+            .map(|node| {
+                let n = node.links.len() as f32;
+                base_size + k * (n + 2.0).sqrt() * self.zoom_factor
+            })
+            .collect();
 
-                node.links
-                    .iter()
-                    .filter_map(|&link| {
-                        if let Some(&target_pos) = self.positions.get(link) {
-                            let target_pos = target_pos.to_vec2();
-                            Some(ui.painter().line_segment(
-                                [pos.to_pos2(), target_pos.to_pos2()],
-                                egui::Stroke::new(1.0 * self.zoom_factor, egui::Color32::GRAY),
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .for_each(drop);
+        let transformed_positions: Vec<Pos2> = self
+            .positions
+            .iter()
+            .map(|pos| {
+                // Apply zoom and pan
+                let zoomed = (pos.to_vec2() - center.to_vec2()) * self.zoom_factor;
+                let panned = zoomed + self.pan;
+                (center.to_vec2() + panned).to_pos2()
+            })
+            .collect();
+
+        // First, draw all the links with optional arrows
+
+        // Draw all the links with optional arrows
+        for (i, node) in self.graph.iter().enumerate() {
+            for &link in &node.links {
+                if let Some(&target_pos) = transformed_positions.get(link) {
+                    let pos = transformed_positions[i];
+                    let target = target_pos;
+
+                    // Draw the link as a line segment
+                    ui.painter().line_segment(
+                        [pos, target],
+                        Stroke::new(1.0 * self.zoom_factor, Color32::GRAY),
+                    );
+
+                    // Check if this link is directional and node size > 15
+                    if self.has_directed_link(node.id, self.graph[link].id) && node_sizes[i] > 15.0
+                    {
+                        // Draw an arrow pointing towards 'link'
+                        draw_arrow(
+                            ui.painter(),
+                            pos,
+                            target,
+                            Color32::from_rgba_unmultiplied(66, 135, 245, 150), // Semi-transparent blue
+                            self.zoom_factor,
+                        );
+                    }
+                }
             }
         }
 
-        // Then, draw all the nodes on top of the links
+        // Draw all the nodes on top of the links
         for (i, node) in self.graph.iter().enumerate() {
-            let rgb_color = egui::Color32::from_rgb(
+            let rgb_color = Color32::from_rgb(
                 (node.color[0] * 255.0) as u8,
                 (node.color[1] * 255.0) as u8,
                 (node.color[2] * 255.0) as u8,
             );
 
-            let n = node.links.len() as f32;
-            let size = base_size + k * (n + 2.0).sqrt() * self.zoom_factor;
-
+            let size = node_sizes[i];
+            let mut text_color = Color32::BLACK;
+            let mut text = node.title.clone();
+            if node.title.ends_with(".md") {
+                text_color = Color32::WHITE;
+                text = node.title.trim_end_matches(".md").to_string();
+            }
             if node.cluster_id.is_some() {
-                let pos = self.positions[i].to_vec2();
+                let pos = transformed_positions[i];
 
                 // Draw the node circle
                 ui.painter().circle(
-                    pos.to_pos2(),
+                    pos,
                     size,
                     rgb_color,
-                    egui::Stroke::new(2.0 * self.zoom_factor, egui::Color32::BLACK),
+                    Stroke::new(0.75 * self.zoom_factor, text_color),
                 );
 
                 // Draw the node title if the radius is large enough
                 if size > 15.0 {
-                    let font_id = egui::FontId::proportional(size);
+                    let font_id = egui::FontId::proportional(12.0 * self.zoom_factor); // Adjust font size based on zoom
                     ui.painter().text(
-                        pos.to_pos2(),
+                        pos,
                         egui::Align2::CENTER_CENTER,
-                        &node.title,
+                        &text,
                         font_id,
-                        egui::Color32::WHITE,
+                        Color32::WHITE,
                     );
                 }
             }
@@ -445,7 +503,59 @@ impl KnowledgeGraphApp {
 
         self.last_screen_size = screen_size;
     }
+    /// Checks if `from_node` has a directed link to `to_node`.
+    fn has_directed_link(&self, from_node: usize, to_node: usize) -> bool {
+        if let Some(links) = self.directional_links.get(&from_node) {
+            links.contains(&to_node)
+        } else {
+            false
+        }
+    }
+    /// Draws an arrow from `from` to `to` with the specified `color` and `zoom_factor`.
+    fn draw_arrow(
+        &mut self,
+        painter: &Painter,
+        from: Pos2,
+        to: Pos2,
+        color: Color32,
+        zoom_factor: f32,
+    ) {
+        let arrow_size = 10.0 * zoom_factor; // Size of the arrowhead
+        let arrow_length = 15.0 * zoom_factor; // Length from the node to the base of the arrowhead
 
+        let direction = to - from;
+        let length = direction.length();
+
+        if length == 0.0 {
+            return; // Avoid division by zero
+        }
+
+        let dir = direction / length;
+
+        // Calculate the base of the arrowhead
+        let arrow_base = to - dir * arrow_length;
+
+        // Calculate the two sides of the arrowhead
+        let angle = std::f32::consts::FRAC_PI_6; // 30 degrees for arrowhead
+        let rotation_matrix = |angle: f32| Vec2::new(angle.cos(), angle.sin());
+
+        let perp = Vec2::new(-dir.y, dir.x); // Perpendicular vector
+
+        let arrow_p1 =
+            arrow_base + dir * arrow_size * angle.cos() + perp * arrow_size * angle.sin();
+        let arrow_p2 =
+            arrow_base + dir * arrow_size * angle.cos() - perp * arrow_size * angle.sin();
+
+        // Draw the two lines of the arrowhead
+        painter.line_segment(
+            [arrow_base, arrow_p1],
+            Stroke::new(1.5 * zoom_factor, color),
+        );
+        painter.line_segment(
+            [arrow_base, arrow_p2],
+            Stroke::new(1.5 * zoom_factor, color),
+        );
+    }
     fn zoomed(&mut self, zoom: f32) {
         self.positions = self
             .positions
@@ -454,13 +564,13 @@ impl KnowledgeGraphApp {
             .collect();
     }
 
-    fn draged(&mut self, offset: egui::Vec2) {
-        self.positions = self
-            .positions
-            .iter()
-            .map(|&pos| (pos.to_vec2() + offset).to_pos2())
-            .collect();
-    }
+    // fn draged(&mut self, offset: egui::Vec2) {
+    //     self.positions = self
+    //         .positions
+    //         .iter()
+    //         .map(|&pos| (pos.to_vec2() + offset).to_pos2())
+    //         .collect();
+    // }
 
     fn label_subgraphs(&mut self) {
         let mut bluecol = 1.0;
@@ -505,7 +615,9 @@ impl KnowledgeGraphApp {
     fn clusters(&mut self, node_id: usize, cluster_id: usize) {
         // Check if the node is already assigned to a cluster
         if self.graph[node_id].cluster_id.is_some() {
+            //if self.graph[node_id].cluster_id.unwrap() == cluster_id {
             return; // Already assigned
+                    //}
         }
 
         // Assign the cluster_id to the current node
@@ -562,6 +674,19 @@ impl KnowledgeGraphApp {
         }
     }
 
+    fn bidiretional(&mut self) {
+        let clonedgraph: &Graph = &self.graph.clone();
+        for nodes in clonedgraph {
+            let node: usize = nodes.id;
+            println!("{:?}", nodes);
+            for link in &nodes.links {
+                if !clonedgraph[*link].links.contains(&node) {
+                    println!("pushed");
+                    self.graph[*link].links.push(node)
+                }
+            }
+        }
+    }
     /// Helper function to get all nodes in a cluster by cluster_id
 
     fn get_cluster_nodes(&self, cluster_id: usize) -> Vec<usize> {
@@ -615,6 +740,49 @@ impl KnowledgeGraphApp {
 
 impl eframe::App for KnowledgeGraphApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        ctx.input(|i| {
+            // 1. Handle Zooming
+            // Detect if Command (macOS) or Control (others) is pressed
+            let is_zoom_modifier = if cfg!(target_os = "macos") {
+                i.modifiers.mac_cmd
+            } else {
+                i.modifiers.ctrl
+            };
+
+            if is_zoom_modifier {
+                // Capture the vertical scroll delta
+                let scroll = i.raw_scroll_delta.y;
+
+                // Adjust the zoom factor based on scroll input
+                // Positive scroll delta -> Zoom in; Negative -> Zoom out
+                if scroll != 0.0 {
+                    self.zoom_factor *= 1.0 + scroll * 0.1; // Adjust sensitivity as needed
+
+                    // Clamp the zoom factor to prevent excessive zooming
+                    self.zoom_factor = self.zoom_factor.clamp(0.5, 3.0);
+                }
+            }
+        });
+
+        // Handle panning via mouse dragging
+        if ctx.input(|i| i.pointer.primary_down()) {
+            if let Some(current_pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                if !self.is_dragging {
+                    self.is_dragging = true;
+                    self.last_drag_pos = Some(current_pos);
+                } else if let Some(last_pos) = self.last_drag_pos {
+                    // Calculate the delta movement
+                    let delta = current_pos - last_pos;
+                    // Adjust the pan offset based on delta and current zoom factor
+                    // Update the last drag position
+                    self.pan += delta / self.zoom_factor;
+                    self.last_drag_pos = Some(current_pos);
+                }
+            }
+        } else {
+            self.is_dragging = false;
+            self.last_drag_pos = None;
+        }
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Knowledge Graph");
             ui.text_edit_singleline(&mut self.debug);
@@ -665,7 +833,7 @@ impl eframe::App for KnowledgeGraphApp {
                     } else if let Some(last_pos) = self.last_drag_pos {
                         // self.debug = String::from("dragged");
                         let delta = current_pos - last_pos;
-                        self.draged(delta);
+                        //self.draged(delta);
                         self.last_drag_pos = Some(current_pos);
                     }
                 }
@@ -722,6 +890,9 @@ fn main() {
         count += 1;
     }
     let mut app = KnowledgeGraphApp::new(graph);
+    app.build_directional_links();
+    println!("{:?}", app.directional_links);
+    app.bidiretional();
     app.label_clusters();
     app.label_subgraphs();
     //app.verify_and_assign_clusters();
@@ -740,6 +911,53 @@ fn fix_graph(mut graph: Vec<LinkNode>) -> Vec<LinkNode> {
     graph.sort_by_key(|node| node.id);
     graph
 }
+
+fn draw_arrow(painter: &Painter, from: Pos2, to: Pos2, color: Color32, zoom_factor: f32) {
+    // Define smaller arrow size parameters
+    let arrow_length = 6.0 * zoom_factor; // Further reduced length for the arrowhead
+    let arrow_width = 4.0 * zoom_factor; // Further reduced width for the arrowhead
+
+    // Adjust color to be semi-transparent
+    let arrow_color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 150); // More transparent
+
+    // Calculate the direction vector from 'from' to 'to'
+    let direction = to - from;
+    let distance = direction.length();
+
+    if distance == 0.0 {
+        return; // Avoid drawing if both points are the same
+    }
+
+    // Normalize the direction vector
+    let dir = direction / distance;
+
+    // Calculate the base position of the arrowhead, leaving a small gap
+    let arrow_base = to - dir * arrow_length;
+
+    // Calculate the perpendicular vector for the arrowhead's width
+    let perp = Vec2::new(-dir.y, dir.x);
+
+    // Calculate the two points of the arrowhead triangle
+    let arrow_p1 = arrow_base + perp * (arrow_width / 2.0);
+    let arrow_p2 = arrow_base - perp * (arrow_width / 2.0);
+
+    // Draw the main line of the arrow
+    painter.line_segment(
+        [from, arrow_base],
+        Stroke::new(1.0 * zoom_factor, arrow_color),
+    );
+
+    // Create a filled triangle for the arrowhead
+    let points = vec![to, arrow_p1, arrow_p2];
+
+    // Draw the arrowhead as a filled convex polygon with no stroke
+    painter.add(Shape::convex_polygon(
+        points,
+        arrow_color,
+        Stroke::new(0.0, Color32::TRANSPARENT),
+    ));
+}
+
 // fn fix_graph(graph: Vec<LinkNode>, len: usize) -> Vec<LinkNode> {
 //     let mut new_graph: Vec<LinkNode> = Vec::new();
 //     let mut graph_id: Vec<(usize, usize)> = Vec::new();
