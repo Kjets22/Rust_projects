@@ -1,8 +1,6 @@
 use std::env;
 
-use eframe::glow::FALSE;
-use egui::Checkbox;
-use lb_rs::{Core, File};
+use lb_rs::Core;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +14,13 @@ pub struct LinkNode {
     pub color: [f32; 3],
     pub cluster_id: Option<usize>,
     pub internal: bool,
+
+    pub x: f32,
+    pub y: f32,
+    pub vx: f32,
+    pub vy: f32,
+    pub fx: Option<f32>,
+    pub fy: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -38,14 +43,21 @@ impl Name_Id {
 }
 
 impl LinkNode {
-    fn new(id: usize, title: String, links: Vec<usize>) -> Self {
+    fn new(id: usize, title: String, links_given: Vec<usize>) -> Self {
         LinkNode {
             id,
             title,
-            links,
+            links: links_given.clone(),
             color: [0.0, 0.0, 0.0],
             cluster_id: None,
             internal: true,
+
+            x: 0.0, // Set to an initial value, e.g., random or based on index
+            y: 0.0, // Set to an initial value
+            vx: 0.0,
+            vy: 0.0,
+            fx: None,
+            fy: None,
         }
     }
 }
@@ -190,25 +202,24 @@ pub(crate) fn lockbookdata() -> Graph {
 
     // Add remaining links in classify to the graph if they don't exist
     for item in classify.iter() {
+        //println!("{:?}\n", item);
         let links = item.links.clone();
+        //println!("{:?}", links);
         if (item.links.contains(&item.id)) {
             let links = remove(links, &item.id);
 
             graph.push(LinkNode::new(item.id, item.name.to_string(), links));
         } else {
-            graph.push(LinkNode::new(
-                item.id,
-                item.name.to_string(),
-                item.links.clone(),
-            ));
+            graph.push(LinkNode::new(item.id, item.name.to_string(), links));
         }
+        //println!("graph      {:?}\n", graph)
     }
     //ensure_bidirectional_links(&mut graph);
     //getnodes(&mut graph);
 
     // println!("Total IDs: {}", id);
     // println!("Total Links: {}", num_links);
-    println!("{:?}", graph);
+    //println!("{:?}", graph);
 
     graph
 }
@@ -257,6 +268,8 @@ fn checkforlinks(classify: &mut Vec<Name_Id>, id: &mut usize, doc: &str) -> Vec<
 
     // Find all links in the document
     let link_names = find_links(doc);
+    println!("links");
+    println!("{:?}", link_names);
 
     for link in link_names {
         // Check if the link is already in classify
@@ -267,30 +280,16 @@ fn checkforlinks(classify: &mut Vec<Name_Id>, id: &mut usize, doc: &str) -> Vec<
             if !links.contains(&link_id) {
                 links.push(link_id);
             }
-            //println!("{:?}", classify);
-            //println!("the link id is {}", link_id);
-            //println!("the node_id is  {}", node_id);
-            //Add the current node ID to the list of links for this link
-            let name_id = getName_Id(&link, &classify);
-            if !name_id.links.contains(&node_id) {
-                getName_Id(&link, &classify).links.push(node_id);
-            }
-
-            // //Now make the link bidirectional: if node_id is linked to link_id, then link_id should link back to node_id
-            // if !getName_Id_by_id(link_id, classify).links.contains(&node_id) {
-            //     getName_Id_by_id(link_id, classify).links.push(node_id);
-            // }
-
-            // // Similarly, ensure node_id also links back to the link_id
-            // if !getName_Id_by_id(node_id, classify).links.contains(&link_id) {
-            //     getName_Id_by_id(node_id, classify).links.push(link_id);
-            // }
+            println!("{:?}", classify);
+            println!("the link id is {}", link_id);
+            println!("the node_id is  {}", node_id);
         } else {
+            links.push(*id);
             *id += 1;
             // If link not found, add it
             //println!("New link found: {}", &link);
-            classify.push(Name_Id::new(classify.len(), link.clone(), vec![node_id]));
-            links.push(*id);
+            classify.push(Name_Id::new(classify.len(), link.clone(), vec![]));
+            println!("psuhing this linknode in {:?}", classify);
             // *id += 1;
         }
     }

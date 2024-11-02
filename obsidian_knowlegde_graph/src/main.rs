@@ -1,29 +1,25 @@
 mod data;
-
-use data::{data, lockbookdata, Graph};
-use eframe::glow::{INFO_LOG_LENGTH, NOR};
-use eframe::{egui, App, Frame};
-use egui::emath::Numeric;
+use crate::data::LinkNode;
+use data::{lockbookdata, Graph};
+use eframe::egui;
 use egui::epaint::Shape;
-use egui::style::Selection;
 use egui::{Color32, Painter, Pos2, Stroke, Vec2};
-use rand::Rng;
-
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time;
 use std::time::Duration;
 use std::{f32, time::Instant};
 use std::{thread, usize};
 
-use crate::data::LinkNode;
-
+// The makes it the code runs faster making it into grids
 struct Grid {
     cell_size: f32,
     grid: HashMap<(i32, i32), Vec<usize>>,
 }
 
-#[derive(Default)]
+// #[derive(Default)]
+// The main reason for these are to make global variables that can be accessed through the whole code
 struct KnowledgeGraphApp {
     graph: Graph,
     positions: Vec<egui::Pos2>,
@@ -39,11 +35,10 @@ struct KnowledgeGraphApp {
     graph_complete: bool,
     layout_started: bool,
     iteration: usize,
-    change: egui::Vec2,
-    last_change: egui::Vec2,
     running: bool,
-    wait: f64,
     directional_links: HashMap<usize, Vec<usize>>,
+    animation: bool,
+    timer: time::Instant,
 }
 
 impl Grid {
@@ -105,11 +100,10 @@ impl KnowledgeGraphApp {
             graph_complete: false,
             layout_started: false,
             iteration: 0,
-            change: egui::Vec2::ZERO,
-            last_change: egui::Vec2::ZERO,
             running: true,
-            wait: 100.0,
             directional_links: HashMap::new(),
+            animation: true,
+            timer: Instant::now(),
         }
     }
 
@@ -139,8 +133,6 @@ impl KnowledgeGraphApp {
 
         let cluster_small_radius = 10.0;
         let main_circle_radius = 50.0;
-        let outer_circle_radius = main_circle_radius + 100.0;
-        let buffer = 20.0;
 
         let mut positions_map = HashMap::new();
         let mut clusters: HashMap<Option<usize>, Vec<usize>> = HashMap::new();
@@ -204,10 +196,8 @@ impl KnowledgeGraphApp {
         let total_outer_nodes = unlinked_nodes.len();
 
         if total_outer_nodes > 0 {
-            let angle_step_outer = 2.0 * std::f32::consts::PI / total_outer_nodes as f32;
-
-            for (i, &node_id) in unlinked_nodes.iter().enumerate() {
-                let mut nocluster: Option<usize> = None;
+            for (_i, &node_id) in unlinked_nodes.iter().enumerate() {
+                let nocluster: Option<usize> = None;
                 self.graph[node_id].cluster_id = nocluster;
             }
         }
@@ -221,14 +211,19 @@ impl KnowledgeGraphApp {
         let width = 700.0;
         let height = 500.0;
         let num_nodes = self.graph.len() as f32;
-        let len = (self.iteration as f32).sqrt();
+        let len = (self.iteration as f32).sqrt() + 1.0;
+        let mut len: usize = len as usize;
         // let len = (len.sqrt() as usize);
-        let len: usize = len as usize + 1;
-        for n in 0..len {
-            let k_spring = 0.001;
-            let k_repel = 1.0;
-            let k_link_nudge = 0.01;
-            let c = 0.01;
+        if self.animation {
+            len = len + 1;
+        } else {
+            len = 250000;
+        }
+        for _n in 0..len {
+            let k_spring = 0.0005;
+            let k_repel = 3.0;
+            // let k_link_nudge = 0.01;
+            let c = 0.5;
 
             let max_movement = 100.0;
 
@@ -243,6 +238,7 @@ impl KnowledgeGraphApp {
                 self.forces[i] = egui::Vec2::ZERO;
             }
 
+            //
             for i in 0..self.graph.len() {
                 let pos_i = self.positions[i];
 
@@ -275,41 +271,41 @@ impl KnowledgeGraphApp {
                 }
             }
 
-            for node in &self.graph {
-                let pos_node = self.positions[node.id];
+            // for node in &self.graph {
+            //     let pos_node = self.positions[node.id];
 
-                for other_node in &self.graph {
-                    for &link in &other_node.links {
-                        if node.id == other_node.id || node.id == link {
-                            continue;
-                        }
+            //     for other_node in &self.graph {
+            //         for &link in &other_node.links {
+            //             if node.id == other_node.id || node.id == link {
+            //                 continue;
+            //             }
 
-                        let pos_a = self.positions[other_node.id];
-                        let pos_b = self.positions[link];
+            //             let pos_a = self.positions[other_node.id];
+            //             let pos_b = self.positions[link];
 
-                        let line_vec = pos_b - pos_a;
-                        let node_vec = pos_node - pos_a;
+            //             let line_vec = pos_b - pos_a;
+            //             let node_vec = pos_node - pos_a;
 
-                        let line_length_sq = line_vec.dot(line_vec).max(0.01);
-                        let t = (node_vec.dot(line_vec) / line_length_sq).clamp(0.0, 1.0);
-                        let closest_point = pos_a + line_vec * t;
+            //             let line_length_sq = line_vec.dot(line_vec).max(0.01);
+            //             let t = (node_vec.dot(line_vec) / line_length_sq).clamp(0.0, 1.0);
+            //             let closest_point = pos_a + line_vec * t;
 
-                        let delta = pos_node - closest_point;
-                        let distance = delta.length().max(0.01);
+            //             let delta = pos_node - closest_point;
+            //             let distance = delta.length().max(0.01);
 
-                        if distance < 30.0 {
-                            let mut rng = rand::thread_rng();
-                            let angle: f32 = rng.gen_range(0.0..std::f32::consts::TAU);
-                            let random_direction = egui::Vec2::angled(angle);
+            //             if distance < 30.0 {
+            //                 let mut rng = rand::thread_rng();
+            //                 let angle: f32 = rng.gen_range(0.0..std::f32::consts::TAU);
+            //                 let random_direction = egui::Vec2::angled(angle);
 
-                            let nudge_magnitude = k_link_nudge * (30.0 - distance);
-                            let nudge = random_direction * nudge_magnitude;
+            //                 let nudge_magnitude = k_link_nudge * (30.0 - distance);
+            //                 let nudge = random_direction * nudge_magnitude;
 
-                            self.forces[node.id] += nudge;
-                        }
-                    }
-                }
-            }
+            //                 self.forces[node.id] += nudge;
+            //             }
+            //         }
+            //     }
+            // }
 
             for i in 0..self.graph.len() {
                 let force_magnitude = self.forces[i].length();
@@ -327,11 +323,13 @@ impl KnowledgeGraphApp {
 
             let total_change = self.forces.iter().map(|f| f.length()).sum::<f32>();
 
-            if total_change < 20.0 || self.iteration >= 250000 {
+            println!("{:?}", total_change);
+            if total_change < 0.02 * (num_nodes) || self.iteration >= 250000 {
                 self.graph_complete = true;
                 self.running = false;
+                break;
             }
-
+            println!("{:?}", self.iteration);
             grid.clear();
         }
     }
@@ -365,6 +363,7 @@ impl KnowledgeGraphApp {
         for (i, node) in self.graph.iter().enumerate() {
             for &link in &node.links {
                 if let Some(&target_pos) = transformed_positions.get(link) {
+                    let size = node_sizes[i];
                     let pos = transformed_positions[i];
                     let target = target_pos;
 
@@ -373,7 +372,9 @@ impl KnowledgeGraphApp {
                         Stroke::new(1.0 * self.zoom_factor, Color32::GRAY),
                     );
 
-                    if self.has_directed_link(node.id, self.graph[link].id) && node_sizes[i] > 15.0
+                    if self.has_directed_link(node.id, self.graph[link].id)
+                        && node_sizes[i] > 15.0
+                        && cursorin(self.cursor_loc, pos, size)
                     {
                         draw_arrow(
                             ui.painter(),
@@ -381,6 +382,7 @@ impl KnowledgeGraphApp {
                             target,
                             Color32::from_rgba_unmultiplied(66, 135, 245, 150), // Semi-transparent blue
                             self.zoom_factor,
+                            node_sizes[1],
                         );
                     }
                 }
@@ -411,8 +413,8 @@ impl KnowledgeGraphApp {
                     Stroke::new(0.75 * self.zoom_factor, text_color),
                 );
 
-                if size > 15.0 {
-                    let font_id = egui::FontId::proportional(12.0 * self.zoom_factor); // Adjust font size based on zoom
+                if size > 15.0 && cursorin(self.cursor_loc, pos, size) {
+                    let font_id = egui::FontId::proportional(6.0 * self.zoom_factor); // Adjust font size based on zoom
                     ui.painter().text(
                         pos,
                         egui::Align2::CENTER_CENTER,
@@ -434,47 +436,6 @@ impl KnowledgeGraphApp {
         }
     }
 
-    fn draw_arrow(
-        &mut self,
-        painter: &Painter,
-        from: Pos2,
-        to: Pos2,
-        color: Color32,
-        zoom_factor: f32,
-    ) {
-        let arrow_size = 10.0 * zoom_factor;
-        let arrow_length = 15.0 * zoom_factor;
-
-        let direction = to - from;
-        let length = direction.length();
-
-        if length == 0.0 {
-            return;
-        }
-
-        let dir = direction / length;
-
-        let arrow_base = to - dir * arrow_length;
-
-        let angle = std::f32::consts::FRAC_PI_6;
-        let rotation_matrix = |angle: f32| Vec2::new(angle.cos(), angle.sin());
-
-        let perp = Vec2::new(-dir.y, dir.x);
-
-        let arrow_p1 =
-            arrow_base + dir * arrow_size * angle.cos() + perp * arrow_size * angle.sin();
-        let arrow_p2 =
-            arrow_base + dir * arrow_size * angle.cos() - perp * arrow_size * angle.sin();
-
-        painter.line_segment(
-            [arrow_base, arrow_p1],
-            Stroke::new(1.5 * zoom_factor, color),
-        );
-        painter.line_segment(
-            [arrow_base, arrow_p2],
-            Stroke::new(1.5 * zoom_factor, color),
-        );
-    }
     fn zoomed(&mut self, zoom: f32) {
         self.positions = self
             .positions
@@ -536,36 +497,6 @@ impl KnowledgeGraphApp {
         }
     }
 
-    fn verify_and_assign_clusters(&mut self) {
-        let main_circle_radius = 200.0_f32;
-        let outer_circle_radius = main_circle_radius + 100.0_f32;
-        let cluster_small_radius = 10.0_f32;
-
-        for (i, node) in self.graph.iter().enumerate() {
-            let distance = self.positions[i].distance(Pos2::new(800.0_f32 / 2.0, 600.0_f32 / 2.0));
-
-            let tolerance = 1.0_f32;
-
-            if (distance - outer_circle_radius).abs() < tolerance {
-                if let Some(cluster_id) = node.cluster_id {
-                    if let cluster_nodes = self.get_cluster_nodes(cluster_id) {
-                        if cluster_nodes.len() > 1 {
-                            let cluster_center = self.get_cluster_center(cluster_id);
-                            let angle = (self.positions[i].y - cluster_center.y)
-                                .atan2(self.positions[i].x - cluster_center.x);
-                            let new_pos = Pos2::new(
-                                cluster_center.x + cluster_small_radius * angle.cos(),
-                                cluster_center.y + cluster_small_radius * angle.sin(),
-                            );
-                            self.positions[i] = new_pos;
-                            println!("Node {} reassigned to its cluster {}", i, cluster_id);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     fn bidiretional(&mut self) {
         let clonedgraph: &Graph = &self.graph.clone();
         for nodes in clonedgraph {
@@ -578,24 +509,6 @@ impl KnowledgeGraphApp {
                 }
             }
         }
-    }
-
-    fn get_cluster_nodes(&self, cluster_id: usize) -> Vec<usize> {
-        self.graph
-            .iter()
-            .enumerate()
-            .filter(|(_, node)| node.cluster_id == Some(cluster_id))
-            .map(|(idx, _)| idx)
-            .collect::<Vec<_>>()
-    }
-    fn get_cluster_center(&self, cluster_id: usize) -> Pos2 {
-        for (i, node) in self.graph.iter().enumerate() {
-            if node.cluster_id == Some(cluster_id) {
-                return self.positions[i];
-            }
-        }
-
-        Pos2::new(800.0_f32 / 2.0, 600.0_f32 / 2.0)
     }
 
     fn dfs(&mut self, node_id: usize, col: f32, redcol: f32, greencol: f32) {
@@ -628,7 +541,7 @@ impl KnowledgeGraphApp {
 }
 
 impl eframe::App for KnowledgeGraphApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.input(|i| {
             // let is_zoom_modifier = if cfg!(target_os = "macos") {
             //     i.modifiers.mac_cmd
@@ -637,13 +550,17 @@ impl eframe::App for KnowledgeGraphApp {
             // };
 
             // if is_zoom_modifier {
-            let scroll = i.raw_scroll_delta.y;
+            self.zoom_factor *= i.zoom_delta();
+            self.debug = (self.zoom_factor).to_string();
+            // let scrolly = i.raw_scroll_delta.y;
+            let scroll = i.raw_scroll_delta.to_pos2();
+            self.pan += (scroll).to_vec2();
+            println!("{:?}", scroll);
+            // if scroll != 0.0 {
+            //     self.zoom_factor *= 1.0 + scroll * 0.1;
 
-            if scroll != 0.0 {
-                self.zoom_factor *= 1.0 + scroll * 0.1;
-
-                self.zoom_factor = self.zoom_factor.clamp(0.5, 3.0);
-            }
+            //     self.zoom_factor = self.zoom_factor.clamp(0.5, 3.0);
+            // }
             self.debug = (self.zoom_factor).to_string();
             // }
         });
@@ -665,6 +582,42 @@ impl eframe::App for KnowledgeGraphApp {
             self.last_drag_pos = None;
         }
         egui::CentralPanel::default().show(ctx, |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {
+                // Reserve space for the button and text
+                ui.allocate_ui_with_layout(
+                    Vec2::new(200.0, 50.0),
+                    egui::Layout::left_to_right(egui::Align::Min),
+                    |ui| {
+                        // Display the text to the left of the button
+                        ui.label("Animation");
+
+                        // Button logic
+                        let _button = egui::Button::new("")
+                            .frame(false)
+                            .sense(egui::Sense::click());
+
+                        let (rect, response) = ui.allocate_exact_size(
+                            Vec2::new(30.0, 30.0), // Circle size
+                            egui::Sense::click(),
+                        );
+
+                        // Check if button is clicked
+                        if response.clicked() {
+                            self.animation = !self.animation;
+                        }
+
+                        // Set button color based on pressed state
+                        let color = if self.animation {
+                            Color32::BLUE
+                        } else {
+                            Color32::GRAY
+                        };
+
+                        // Draw the circle button
+                        ui.painter().circle_filled(rect.center(), 5.0, color); // 15.0 is the radius
+                    },
+                );
+            });
             ui.heading("Knowledge Graph");
             ui.text_edit_singleline(&mut self.debug);
 
@@ -675,13 +628,16 @@ impl eframe::App for KnowledgeGraphApp {
 
             let screen_size = ui.available_size();
 
+            // let mut time: Instant = Instant::now();
             if !self.layout_started {
+                self.timer = Instant::now();
                 self.initialize_positions();
                 self.layout_started = true;
             } else if !self.graph_complete {
                 self.apply_spring_layout();
                 println!("iteration {}", self.iteration);
             }
+            // println!("{:?}", time.elapsed());
 
             self.draw_graph(ui, screen_size);
 
@@ -690,9 +646,13 @@ impl eframe::App for KnowledgeGraphApp {
             }
             if self.running {
                 self.debug = String::from("running");
-            } else {
-                let start_time = Instant::now();
+            } else if self.layout_time == 0.0 {
+                self.layout_time = self.timer.elapsed().as_secs_f64();
                 self.debug = String::from("done");
+            }
+
+            if let Some(cursor) = ctx.input(|i| i.pointer.hover_pos()) {
+                self.cursor_loc = cursor.to_vec2();
             }
         });
         if !self.running {
@@ -702,8 +662,8 @@ impl eframe::App for KnowledgeGraphApp {
                     if !self.is_dragging {
                         self.is_dragging = true;
                         self.last_drag_pos = Some(current_pos);
-                    } else if let Some(last_pos) = self.last_drag_pos {
-                        let delta = current_pos - last_pos;
+                    } else if let Some(_last_pos) = self.last_drag_pos {
+                        // let delta = current_pos - last_pos;
 
                         self.last_drag_pos = Some(current_pos);
                     }
@@ -733,6 +693,9 @@ impl eframe::App for KnowledgeGraphApp {
                 }
             }
         }
+        if let Some(cursor) = ctx.input(|i| i.pointer.hover_pos()) {
+            self.cursor_loc = cursor.to_vec2();
+        }
     }
 }
 
@@ -750,7 +713,6 @@ fn main() {
         }
     });
 
-    let len = graph.len();
     let graph = fix_graph(graph);
 
     let mut count: usize = 0;
@@ -779,7 +741,21 @@ fn fix_graph(mut graph: Vec<LinkNode>) -> Vec<LinkNode> {
     graph
 }
 
-fn draw_arrow(painter: &Painter, from: Pos2, to: Pos2, color: Color32, zoom_factor: f32) {
+fn draw_arrow(
+    painter: &Painter,
+    from: Pos2,
+    to: Pos2,
+    color: Color32,
+    zoom_factor: f32,
+    size: f32,
+) {
+    let x = from.x - to.x;
+    let y = from.y - to.y;
+    let angle = (y / x).atan();
+    let new_x = size * angle.cos();
+    let new_y: f32 = size * angle.sin();
+    let intersect = Pos2::new(new_x, new_y);
+    let to = to + intersect.to_vec2();
     let arrow_length = 6.0 * zoom_factor;
     let arrow_width = 4.0 * zoom_factor;
 
@@ -813,4 +789,13 @@ fn draw_arrow(painter: &Painter, from: Pos2, to: Pos2, color: Color32, zoom_fact
         arrow_color,
         Stroke::new(0.0, Color32::TRANSPARENT),
     ));
+}
+
+fn cursorin(cursor: Vec2, center: Pos2, size: f32) -> bool {
+    if cursor.x > (center.x - size) && (center.x + size) > cursor.x {
+        if cursor.y > (center.y - size) && (center.y + size) > cursor.y {
+            return true;
+        }
+    }
+    false
 }
