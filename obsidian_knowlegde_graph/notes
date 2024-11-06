@@ -1,1 +1,34 @@
+this is for nodes with more than 200 nodes 
+let k_spring = 0.001;
+            let k_repel = 1.0;
+            let k_link_nudge = 0.01;
+            let c = 0.01;
 
+            let max_movement = 100.0;
+			
+for 10 nodes or less this works great 
+            let k_spring = 0.0001;
+            let k_repel = 5.0;
+            let k_link_nudge = 0.01;
+            let c = 1.0;
+works for 60 simple nodes to 
+
+
+ok so today is nov 2 2024
+what i am doing is trying to get the drag to be as good as the zoom
+to do this i need to use egui functions as egui as good predifine fucnitons
+I have realized the raw_scroll_delta is the same as draggin so i want to use this to make it
+so i can drag as good and the lock book canvas which would make it look much nicer and many times more
+proffesional, so i will have to look more into raw_srcoll_delta that is the changes i have made to the code
+today.
+
+so raw scroll_delta is the drag information and i can use this raw_sroll_delata to change the postion of the noes
+and where they are change. So i have to do that.
+
+Ok now i am able to make it so i can drag with 2 fingers and have made the drag much smoother and better
+
+
+figured out why it is not working if it is on the negvative x axis or postive x axis it goes to the other cirecurfurmce 
+and not the one that i want it to go for
+
+ok attempted a change and now need to try and fix to see if it is working

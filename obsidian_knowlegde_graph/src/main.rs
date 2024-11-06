@@ -373,7 +373,7 @@ impl KnowledgeGraphApp {
                     );
 
                     if self.has_directed_link(node.id, self.graph[link].id)
-                        && node_sizes[i] > 15.0
+                        && node_sizes[i] > 20.0
                         && cursorin(self.cursor_loc, pos, size)
                     {
                         draw_arrow(
@@ -413,7 +413,7 @@ impl KnowledgeGraphApp {
                     Stroke::new(0.75 * self.zoom_factor, text_color),
                 );
 
-                if size > 15.0 && cursorin(self.cursor_loc, pos, size) {
+                if size > 20.0 && cursorin(self.cursor_loc, pos, size) {
                     let font_id = egui::FontId::proportional(6.0 * self.zoom_factor); // Adjust font size based on zoom
                     ui.painter().text(
                         pos,
@@ -715,11 +715,6 @@ fn main() {
 
     let graph = fix_graph(graph);
 
-    let mut count: usize = 0;
-    for node in &graph {
-        println!("count is { }   node id is { }", node.id, count);
-        count += 1;
-    }
     let mut app = KnowledgeGraphApp::new(graph);
     app.build_directional_links();
     println!("{:?}", app.directional_links);
@@ -754,8 +749,13 @@ fn draw_arrow(
     let angle = (y / x).atan();
     let new_x = size * angle.cos();
     let new_y: f32 = size * angle.sin();
-    let intersect = Pos2::new(new_x, new_y);
-    let to = to + intersect.to_vec2();
+    let mut intersect = Pos2::new(new_x, new_y);
+    if x < 0.0 {
+        intersect = intersect;
+    } else {
+        intersect = (Pos2::new(0.0, 0.0) - intersect.to_vec2());
+    }
+    let to = to - intersect.to_vec2();
     let arrow_length = 6.0 * zoom_factor;
     let arrow_width = 4.0 * zoom_factor;
 
