@@ -3,7 +3,7 @@ use crate::data::LinkNode;
 use data::{lockbookdata, Graph};
 use eframe::egui;
 use egui::epaint::Shape;
-use egui::{Color32, Painter, Pos2, Stroke, Vec2};
+use egui::{Align2, Color32, FontId, Painter, Pos2, Stroke, Vec2};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -25,6 +25,7 @@ struct KnowledgeGraphApp {
     positions: Vec<egui::Pos2>,
     forces: Vec<egui::Vec2>,
     zoom_factor: f32,
+    last_zoom: f32,
     pan: Vec2,
     last_screen_size: egui::Vec2,
     cursor_loc: egui::Vec2,
@@ -90,6 +91,7 @@ impl KnowledgeGraphApp {
             positions,
             forces,
             zoom_factor: 1.0,
+            last_zoom: 1.0,
             pan: Vec2::ZERO,
             last_screen_size: egui::Vec2::new(800.0, 600.0),
             cursor_loc: egui::Vec2::ZERO,
@@ -323,8 +325,8 @@ impl KnowledgeGraphApp {
 
             let total_change = self.forces.iter().map(|f| f.length()).sum::<f32>();
 
-            println!("{:?}", total_change);
-            if total_change < 0.02 * (num_nodes) || self.iteration >= 250000 {
+            //println!("{:?}", total_change);
+            if total_change < 0.01 * (num_nodes) || self.iteration >= 250000 {
                 self.graph_complete = true;
                 self.running = false;
                 break;
@@ -340,13 +342,14 @@ impl KnowledgeGraphApp {
 
         let base_size = radius;
         let k = 1.0;
-
+        let mut drawinfo: Option<(&Painter, Pos2, Pos2, Color32, f32, f32, f32)> = None;
+        let mut drawingstuf: Option<(usize, &LinkNode)> = None;
         let node_sizes: Vec<f32> = self
             .graph
             .iter()
             .map(|node| {
                 let n = node.links.len() as f32;
-                base_size + k * (n + 2.0).sqrt() * self.zoom_factor
+                base_size + k * (n + 3.0).sqrt() * self.zoom_factor
             })
             .collect();
 
@@ -359,36 +362,56 @@ impl KnowledgeGraphApp {
                 (center.to_vec2() + panned).to_pos2()
             })
             .collect();
-
+        let mut hoveredvalue = self.graph.len() + 1;
+        for (i, node) in self.graph.iter().enumerate() {
+            let size = node_sizes[i];
+            let pos = transformed_positions[i];
+            if node_sizes[i] > 5.0 && cursorin(self.cursor_loc, pos, size) {
+                hoveredvalue = i;
+            }
+        }
         for (i, node) in self.graph.iter().enumerate() {
             for &link in &node.links {
                 if let Some(&target_pos) = transformed_positions.get(link) {
                     let size = node_sizes[i];
                     let pos = transformed_positions[i];
                     let target = target_pos;
-
-                    ui.painter().line_segment(
-                        [pos, target],
-                        Stroke::new(1.0 * self.zoom_factor, Color32::GRAY),
-                    );
+                    let target_size = node_sizes[link];
 
                     if self.has_directed_link(node.id, self.graph[link].id)
-                        && node_sizes[i] > 20.0
+                        && node_sizes[i] > 5.0
                         && cursorin(self.cursor_loc, pos, size)
                     {
-                        draw_arrow(
-                            ui.painter(),
-                            pos,
-                            target,
-                            Color32::from_rgba_unmultiplied(66, 135, 245, 150), // Semi-transparent blue
-                            self.zoom_factor,
-                            node_sizes[1],
+                        drawingstuf = Some((i, node));
+                        // drawinfo = Some((
+                        //     ui.painter(),
+                        //     pos,
+                        //     target,
+                        //     Color32::from_rgba_unmultiplied(66, 135, 245, 150), // Semi-transparent blue
+                        //     self.zoom_factor,
+                        //     target_size,
+                        //     size,
+                        // ));
+                        // draw_arrow(
+                        //     ui.painter(),
+                        //     pos,
+                        //     target,
+                        //     Color32::from_rgba_unmultiplied(66, 135, 245, 150), // Semi-transparent blue
+                        //     self.zoom_factor,
+                        //     target_size,
+                        // );
+                    } else if link == hoveredvalue {
+                    } else {
+                        ui.painter().line_segment(
+                            [pos, target],
+                            Stroke::new(1.0 * self.zoom_factor, Color32::GRAY),
                         );
                     }
                 }
             }
         }
 
+        let mut text_info: Option<(Pos2, Align2, String, FontId, Color32)> = None;
         for (i, node) in self.graph.iter().enumerate() {
             let rgb_color = Color32::from_rgb(
                 (node.color[0] * 255.0) as u8,
@@ -400,7 +423,7 @@ impl KnowledgeGraphApp {
             let mut text_color = Color32::BLACK;
             let mut text = node.title.clone();
             if node.title.ends_with(".md") {
-                text_color = Color32::WHITE;
+                text_color = Color32::LIGHT_BLUE;
                 text = node.title.trim_end_matches(".md").to_string();
             }
             if node.cluster_id.is_some() {
@@ -413,17 +436,55 @@ impl KnowledgeGraphApp {
                     Stroke::new(0.75 * self.zoom_factor, text_color),
                 );
 
-                if size > 20.0 && cursorin(self.cursor_loc, pos, size) {
-                    let font_id = egui::FontId::proportional(6.0 * self.zoom_factor); // Adjust font size based on zoom
-                    ui.painter().text(
+                if size > 5.0 && cursorin(self.cursor_loc, pos, size) {
+                    let font_id = egui::FontId::proportional(15.0 * (self.zoom_factor.sqrt())); // Adjust font size based on zoom
+                    text_info = Some((
                         pos,
                         egui::Align2::CENTER_CENTER,
-                        &text,
+                        text,
                         font_id,
                         Color32::WHITE,
-                    );
+                    ));
+                    // ui.painter().text(
+                    //     pos,
+                    //     egui::Align2::CENTER_CENTER,
+                    //     &text,
+                    //     font_id,
+                    //     Color32::WHITE,
+                    // );
                 }
             }
+        }
+        // if let Some((painter, pos, target, color, zoom_factor, size, self_size)) = drawinfo {
+        //     draw_arrow(painter, pos, target, color, zoom_factor, size, self_size);
+        // }
+        if let Some((i, node)) = drawingstuf {
+            for &link in &node.links {
+                if let Some(&target_pos) = transformed_positions.get(link) {
+                    let size = node_sizes[i];
+                    let pos = transformed_positions[i];
+                    let target = target_pos;
+                    let target_size = node_sizes[link];
+
+                    if self.has_directed_link(node.id, self.graph[link].id)
+                        && node_sizes[i] > 5.0
+                        && cursorin(self.cursor_loc, pos, size)
+                    {
+                        draw_arrow(
+                            ui.painter(),
+                            pos,
+                            target,
+                            Color32::from_rgba_unmultiplied(66, 135, 245, 150), // Semi-transparent blue
+                            self.zoom_factor,
+                            target_size,
+                            size,
+                        );
+                    }
+                }
+            }
+        }
+        if let Some((pos, anchor, text, font_id, text_color)) = text_info {
+            ui.painter().text(pos, anchor, text, font_id, text_color);
         }
 
         self.last_screen_size = screen_size;
@@ -551,11 +612,12 @@ impl eframe::App for KnowledgeGraphApp {
 
             // if is_zoom_modifier {
             self.zoom_factor *= i.zoom_delta();
+            // self.zoomed(i.zoom_delta());
             self.debug = (self.zoom_factor).to_string();
             // let scrolly = i.raw_scroll_delta.y;
             let scroll = i.raw_scroll_delta.to_pos2();
             self.pan += (scroll).to_vec2();
-            println!("{:?}", scroll);
+            //println!("{:?}", scroll);
             // if scroll != 0.0 {
             //     self.zoom_factor *= 1.0 + scroll * 0.1;
 
@@ -585,7 +647,7 @@ impl eframe::App for KnowledgeGraphApp {
             ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {
                 // Reserve space for the button and text
                 ui.allocate_ui_with_layout(
-                    Vec2::new(200.0, 50.0),
+                    Vec2::new(100.0, 50.0),
                     egui::Layout::left_to_right(egui::Align::Min),
                     |ui| {
                         // Display the text to the left of the button
@@ -597,7 +659,7 @@ impl eframe::App for KnowledgeGraphApp {
                             .sense(egui::Sense::click());
 
                         let (rect, response) = ui.allocate_exact_size(
-                            Vec2::new(30.0, 30.0), // Circle size
+                            Vec2::new(20.0, 15.0), // Circle size
                             egui::Sense::click(),
                         );
 
@@ -743,23 +805,17 @@ fn draw_arrow(
     color: Color32,
     zoom_factor: f32,
     size: f32,
+    self_size: f32,
 ) {
-    let x = from.x - to.x;
-    let y = from.y - to.y;
-    let angle = (y / x).atan();
-    let new_x = size * angle.cos();
-    let new_y: f32 = size * angle.sin();
-    let mut intersect = Pos2::new(new_x, new_y);
-    if x < 0.0 {
-        intersect = intersect;
-    } else {
-        intersect = (Pos2::new(0.0, 0.0) - intersect.to_vec2());
-    }
+    let intersect = intersectstuff(from, to, size);
+    let intersect2 = intersectstuff1(from, to, self_size);
+
     let to = to - intersect.to_vec2();
+    let from = from - intersect2.to_vec2();
     let arrow_length = 6.0 * zoom_factor;
     let arrow_width = 4.0 * zoom_factor;
 
-    let arrow_color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 150);
+    let arrow_color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 255);
 
     let direction = to - from;
     let distance = direction.length();
@@ -787,7 +843,7 @@ fn draw_arrow(
     painter.add(Shape::convex_polygon(
         points,
         arrow_color,
-        Stroke::new(0.0, Color32::TRANSPARENT),
+        Stroke::new(0.0, color),
     ));
 }
 
@@ -798,4 +854,32 @@ fn cursorin(cursor: Vec2, center: Pos2, size: f32) -> bool {
         }
     }
     false
+}
+fn intersectstuff(from: Pos2, to: Pos2, size: f32) -> Pos2 {
+    let x = from.x - to.x;
+    let y = from.y - to.y;
+    let angle = (y / x).atan();
+    let new_x = size * angle.cos();
+    let new_y: f32 = size * angle.sin();
+    let mut intersect = Pos2::new(new_x, new_y);
+    if x < 0.0 {
+        intersect = intersect;
+    } else {
+        intersect = (Pos2::new(0.0, 0.0) - intersect.to_vec2());
+    }
+    intersect
+}
+fn intersectstuff1(from: Pos2, to: Pos2, size: f32) -> Pos2 {
+    let x = from.x - to.x;
+    let y = from.y - to.y;
+    let angle = (y / x).atan();
+    let new_x = size * angle.cos();
+    let new_y: f32 = size * angle.sin();
+    let mut intersect = Pos2::new(new_x, new_y);
+    if x > 0.0 {
+        intersect = intersect;
+    } else {
+        intersect = (Pos2::new(0.0, 0.0) - intersect.to_vec2());
+    }
+    intersect
 }

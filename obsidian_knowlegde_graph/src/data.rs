@@ -174,32 +174,67 @@ pub(crate) fn lockbookdata() -> Graph {
     let core = core();
     let mut id: usize = 0;
     let mut num_links = 1;
+    let mut info: Vec<(String, String)> = Vec::new();
 
     for file in core.list_metadatas().unwrap() {
         if file.is_document() && file.name.ends_with(".md") {
             let doc = core.read_document(file.id).unwrap();
             let doc = String::from_utf8(doc).unwrap();
             let name = file.name;
+            info.push((name, doc));
             //classify.push(Name_Id::new(classify.len(), name.clone(), vec![]));
-
-            // Check for links in the document
-            let links = checkforlinks(&mut classify, &mut id, &doc);
-            id += 1;
-            num_links += links.len();
-            classify.push(Name_Id::new(classify.len(), name.clone(), links));
-            //add_links(links, &mut getName_Id(&name, &classify));
-            println!("{:?}", getName_Id(&name, &classify));
-            //getName_Id(&name, &classify).links = links.clone;
-
-            // Add the document as a node with its links
-            // graph.push(LinkNode::new(
-            //     in_classify(&name, &classify).unwrap(),
-            //     name.clone(),
-            //     getName_Id(&name, &classify).links,
-            // ));
         }
     }
 
+    info.sort_by(|a, b| a.0.cmp(&b.0));
+    for n in info {
+        // Check for links in the document
+        let doc = n.1;
+        let name = n.0;
+        let links = checkforlinks(&mut classify, &mut id, &doc);
+        id += 1;
+        num_links += links.len();
+        classify.push(Name_Id::new(classify.len(), name.clone(), links));
+        //add_links(links, &mut getName_Id(&name, &classify));
+        // println!("{:?}", getName_Id(&name, &classify));
+        //getName_Id(&name, &classify).links = links.clone;
+
+        // Add the document as a node with its links
+        // graph.push(LinkNode::new(
+        //     in_classify(&name, &classify).unwrap(),
+        //     name.clone(),
+        //     getName_Id(&name, &classify).links,
+        // ));
+
+        // classify.sort_by(|a, b| a.name.cmp(&b.name));
+        // println!("{:?}", classify);
+        // let mut alphbetical: Vec<Name_Id> = Vec::new();
+        // let mut new = classify.clone();
+        // for i in classify.iter() {
+        //     if (alphbetical.len() == 0) {
+        //         alphbetical.push(i);
+        //     }
+        // }
+        // for i in classify.iter() {
+        //     let mut lowestletter = i.name.clone();
+        //     let mut index = 0;
+        //     let mut lowindex = 0;
+        //     for j in new.iter() {
+        //         if (lowestletter > j.name) {
+        //             println!(
+        //                 "lowestnumber is {} and new name is {}",
+        //                 lowestletter, j.name
+        //             );
+        //             lowestletter = j.name.clone();
+        //             lowindex = index;
+        //         }
+        //         index = index + 1;
+        //     }
+        //     classify.remove(lowindex);
+        //     new.remove(lowindex);
+        // }
+    }
+    println!("{:?}", classify);
     // Add remaining links in classify to the graph if they don't exist
     for item in classify.iter() {
         //println!("{:?}\n", item);
@@ -268,8 +303,8 @@ fn checkforlinks(classify: &mut Vec<Name_Id>, id: &mut usize, doc: &str) -> Vec<
 
     // Find all links in the document
     let link_names = find_links(doc);
-    println!("links");
-    println!("{:?}", link_names);
+    // println!("links");
+    // println!("{:?}", link_names);
 
     for link in link_names {
         // Check if the link is already in classify
@@ -280,16 +315,16 @@ fn checkforlinks(classify: &mut Vec<Name_Id>, id: &mut usize, doc: &str) -> Vec<
             if !links.contains(&link_id) {
                 links.push(link_id);
             }
-            println!("{:?}", classify);
-            println!("the link id is {}", link_id);
-            println!("the node_id is  {}", node_id);
+            // println!("{:?}", classify);
+            // println!("the link id is {}", link_id);
+            // println!("the node_id is  {}", node_id);
         } else {
             links.push(*id);
             *id += 1;
             // If link not found, add it
             //println!("New link found: {}", &link);
             classify.push(Name_Id::new(classify.len(), link.clone(), vec![]));
-            println!("psuhing this linknode in {:?}", classify);
+            // println!("psuhing this linknode in {:?}", classify);
             // *id += 1;
         }
     }

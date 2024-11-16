@@ -32,3 +32,13 @@ figured out why it is not working if it is on the negvative x axis or postive x 
 and not the one that i want it to go for
 
 ok attempted a change and now need to try and fix to see if it is working
+
+Data 11/14/2024
+Today i did a good amount of stuff to make it look nicer
+fixed the arrow so it is always on the outside of the cirle at the intersection point
+fixed it so arrow is no longer transparent 
+make it so arrow is always ontop of everything else
+make it so the name is ontop of everyhting 
+changed the outline to a lightblue to make it so it is better to read and easyier
+made it so arrows are just arrows instead of putting it ontop of a link so it looks nicer
+
