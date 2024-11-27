@@ -41,6 +41,9 @@ struct KnowledgeGraphApp {
     animation: bool,
     timer: time::Instant,
     thread_positions: Arc<RwLock<Vec<Pos2>>>,
+    frame_count: usize,
+    fps: f32,
+    last_fps_update: Instant,
 }
 
 impl Grid {
@@ -109,6 +112,9 @@ impl KnowledgeGraphApp {
             animation: true,
             timer: Instant::now(),
             thread_positions: Arc::new(RwLock::new(thread_positions)),
+            frame_count: 0,
+            fps: 0.0,
+            last_fps_update: Instant::now(),
         }
     }
 
@@ -210,84 +216,91 @@ impl KnowledgeGraphApp {
         self.positions = (0..self.graph.len())
             .map(|i| *positions_map.get(&i).unwrap_or(&main_center))
             .collect();
+        {
+            let mut threadinfo = self.thread_positions.write().unwrap();
+            *threadinfo = self.positions.clone();
+        }
     }
 
+    // Assuming Grid and LinkNode are defined elsewhere in your code
+    // struct Grid { ... }
+    // struct LinkNode { id: usize, links: Vec<usize>, /* other fields */ }
+
     fn apply_spring_layout(
-        mut thread_positions: Arc<RwLock<Vec<Pos2>>>,
-        mut iteration: usize,
-        mut graph_len: usize,
-        mut positions: Vec<Pos2>,
-        mut forces: Vec<Vec2>,
-        mut graph: Vec<LinkNode>,
+        thread_positions: Arc<RwLock<Vec<Pos2>>>,
+        graph: &[LinkNode],
+        animation: bool,
+        max_iterations: usize,
     ) {
-        // let mut positions = thread_positions.write().unwrap();
         let width = 700.0;
         let height = 500.0;
-        let num_nodes = graph_len as f32;
-        let area = width * height;
-        let mut temperature = (width + height) / 10.0;
-        let cooling_factor = 0.99; // Slower cooling
-        let max_iterations = 250000;
-        let k = (area / num_nodes).sqrt();
-        let center = egui::Pos2::new(width / 2.0, height / 2.0);
+        let num_nodes = graph.len() as f32;
+
+        // Spring and repulsion constants
+        let k_spring = 0.005;
+        let k_repel = 3.0;
+        let c = 0.5; // Scaling factor for movement
+        let max_movement = 100.0;
+
+        // Gravity parameters
         let gravity_strength = 0.0001; // Adjust as needed
-        let node_radius = 20.0; // Adjust based on node size
-        let padding = 5.0; // Additional space to prevent overlap
-        let additional_spacing = 10.0; // Extra space between connected nodes
-        let L = 2.0 * node_radius + padding + additional_spacing; // Ideal edge length
-        let epsilon = 0.1; // Small value to prevent division by zero
-        let attraction_multiplier = 0.1; // Further reduced attractive force
+        let center = Pos2::new(width / 2.0, height / 2.0);
 
-        // Randomize initial positions if not already done
-        // if iteration == 0 {
-        //     self.initialize_positions();
-        // }
-        for _ in 0..max_iterations {
-            iteration += 1;
-            println!("{:?}", positions[1]);
-
-            // Reset forces
-            for i in 0..graph_len {
-                forces[i] = egui::Vec2::ZERO;
-            }
-
-            // Repulsive forces
-            let cell_size = k;
+        for _n in 0..max_iterations {
+            let cell_size = (width * height / num_nodes).sqrt();
             let mut grid = Grid::new(cell_size);
 
+            // Read current positions
+            let positions = {
+                let pos_lock = thread_positions.read().unwrap();
+                pos_lock.clone()
+            };
+
+            // Insert nodes into the grid for spatial partitioning
             for (i, &pos) in positions.iter().enumerate() {
                 grid.insert_node(pos, i);
             }
 
-            for i in 0..graph_len {
+            // Initialize forces
+            let mut forces = vec![Vec2::ZERO; graph.len()];
+
+            // Calculate repulsive forces
+            for i in 0..graph.len() {
                 let pos_i = positions[i];
 
                 for cell in grid.get_neighboring_cells(pos_i) {
                     for &j in cell {
                         if i != j {
-                            let delta = pos_i - positions[j]; // delta: Vec2
-                            let distance = delta.length().max(epsilon);
+                            let delta = pos_i - positions[j];
+                            let distance = delta.length().max(0.01);
 
-                            // Increased repulsive force (inverse quartic)
-                            let repulsive_force =
-                                (k * k * k * k) / (distance * distance * distance * distance);
+                            // Repulsive force calculation (inverse quartic)
+                            let repulsive_force = k_repel / (distance * distance / 20.0);
                             let repulsion = delta.normalized() * repulsive_force;
 
                             forces[i] += repulsion;
+                            forces[j] -= repulsion;
                         }
                     }
                 }
             }
 
-            // Attractive forces with updated ideal edge length
-            for node in &graph {
+            // Calculate attractive forces
+            for node in graph {
                 for &link in &node.links {
-                    let delta = positions[node.id] - positions[link]; // delta: Vec2
-                    let distance = delta.length().max(epsilon);
+                    if link >= graph.len() {
+                        println!(
+                            "Warning: Node {} has a link to invalid node {}",
+                            node.id, link
+                        );
+                        continue;
+                    }
 
-                    // Adjusted attractive force
-                    let attractive_force =
-                        (((distance - L) * distance) / k) * attraction_multiplier;
+                    let delta = positions[node.id] - positions[link];
+                    let distance = delta.length().max(0.01);
+
+                    // Attractive force calculation (custom formula)
+                    let attractive_force = k_spring * distance * (distance / 20.0) as f32;
                     let attraction = delta.normalized() * attractive_force;
 
                     forces[node.id] -= attraction;
@@ -295,77 +308,82 @@ impl KnowledgeGraphApp {
                 }
             }
 
-            // Gravity force
-            for i in 0..graph_len {
-                let delta = (positions[i] - center); // delta: Vec2
-                let distance = delta.length().max(epsilon);
+            // Apply gravity to pull nodes toward the center
+            for i in 0..graph.len() {
+                let delta = positions[i] - center;
+                let distance = delta.length().max(0.01);
                 let gravity_force = delta.normalized() * (distance * gravity_strength);
                 forces[i] -= gravity_force;
             }
 
-            // Update positions
-            for i in 0..graph_len {
-                let movement = forces[i];
+            // Update positions based on forces
+            let mut new_positions = positions.clone();
+            for i in 0..graph.len() {
+                let force_magnitude = forces[i].length();
 
-                // Limit maximum displacement
-                let displacement = if movement.length() > temperature {
-                    movement.normalized() * temperature
+                let movement = if force_magnitude > max_movement {
+                    forces[i] * (max_movement / force_magnitude)
                 } else {
-                    movement
+                    forces[i]
                 };
 
-                positions[i] += displacement;
+                new_positions[i] += movement * c;
             }
 
-            // Collision detection and resolution between all nodes
-            let collision_cell_size = 2.0 * node_radius + padding;
-            let mut collision_grid = Grid::new(collision_cell_size);
+            // // Collision detection and resolution to prevent overlapping nodes
+            // let collision_cell_size = 2.0 * 20.0 + 5.0; // node_radius = 20.0, padding = 5.0
+            // let mut collision_grid = Grid::new(collision_cell_size);
 
-            for (i, &pos) in positions.iter().enumerate() {
-                collision_grid.insert_node(pos, i);
-            }
+            // for (i, &pos) in new_positions.iter().enumerate() {
+            //     collision_grid.insert_node(pos, i);
+            // }
 
-            for i in 0..graph_len {
-                let pos_i = positions[i];
+            // for i in 0..graph.len() {
+            //     let pos_i = new_positions[i];
 
-                for cell in collision_grid.get_neighboring_cells(pos_i) {
-                    for &j in cell {
-                        if i != j {
-                            let delta = pos_i - positions[j];
-                            let distance = delta.length();
-                            let min_distance = 2.0 * node_radius + padding;
+            //     for cell in collision_grid.get_neighboring_cells(pos_i) {
+            //         for &j in cell {
+            //             if i != j {
+            //                 let delta = new_positions[i] - new_positions[j];
+            //                 let distance = delta.length();
+            //                 let min_distance = 2.0 * 20.0 + 5.0; // node_radius + padding
 
-                            if distance < min_distance {
-                                let overlap = min_distance - distance;
-                                let correction = delta.normalized() * (overlap / 2.0);
-                                positions[i] += correction;
-                                positions[j] -= correction;
-                            }
-                        }
-                    }
-                }
-            }
+            //                 if distance < min_distance {
+            //                     let overlap = min_distance - distance;
+            //                     let correction = delta.normalized() * (overlap / 2.0);
+            //                     new_positions[i] += correction;
+            //                     new_positions[j] -= correction;
+            //                 }
+            //             }
+            //         }
+            //     }
+            // }
+
+            // Write updated positions back to thread_positions
             {
                 let mut pos_lock = thread_positions.write().unwrap();
-                *pos_lock = positions.clone();
+                *pos_lock = new_positions.clone();
             }
 
-            // Reduce temperature
-            temperature *= cooling_factor;
+            // Calculate total change for convergence
+            let total_change: f32 = forces.iter().map(|f| f.length()).sum();
+
+            // Debugging: Print iteration and total change
+            if _n % 1000 == 0 {
+                println!("Iteration: {}, Total Change: {:.4}", _n, total_change);
+            }
 
             // Convergence check
-            let total_change = forces.iter().map(|f| f.length()).sum::<f32>();
-
-            if iteration >= max_iterations {
-                // graph_complete = true;
-                // running = false;
+            if total_change < 0.01 * num_nodes || _n >= max_iterations {
+                println!(
+                    "Converged after {} iterations with total change {:.4}",
+                    _n, total_change
+                );
                 break;
             }
-            println!("{:?},  {:?}", positions[1], total_change);
 
-            // Clear grids if reused
-            // grid.clear();
-            // collision_grid.clear();
+            println!("Current Iteration: {}", _n);
+            grid.clear();
         }
     }
 
@@ -720,11 +738,7 @@ impl eframe::App for KnowledgeGraphApp {
             ui.heading("Knowledge Graph");
             ui.text_edit_singleline(&mut self.debug);
 
-            ui.label(format!(
-                "Layout computation time: {:.2} seconds",
-                self.layout_time
-            ));
-
+            ui.label(format!("FPS: {:.2}", self.fps));
             let screen_size = ui.available_size();
 
             if !self.graph_complete {
@@ -740,14 +754,7 @@ impl eframe::App for KnowledgeGraphApp {
                 let postions = self.positions.clone();
                 let graph = self.graph.clone();
                 thread::spawn(move || {
-                    Self::apply_spring_layout(
-                        postioninfo,
-                        iterations,
-                        graphlen,
-                        postions,
-                        forces,
-                        graph,
-                    );
+                    Self::apply_spring_layout(postioninfo, &graph, false, 250000);
                 });
                 println!("ok done");
                 // while !is_finished.load(Ordering::SeqCst) {
@@ -787,6 +794,17 @@ impl eframe::App for KnowledgeGraphApp {
             // if !self.graph_complete {
             //     ctx.request_repaint();
             // }
+
+            self.frame_count += 1;
+            let now = Instant::now();
+            let elapsed = now.duration_since(self.last_fps_update);
+
+            if elapsed >= Duration::from_secs(1) {
+                self.fps = self.frame_count as f32 / elapsed.as_secs_f32();
+                self.frame_count = 0;
+                self.last_fps_update = now;
+            }
+
             if self.running {
                 self.debug = String::from("running");
             } else if self.layout_time == 0.0 {
