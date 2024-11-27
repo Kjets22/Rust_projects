@@ -234,7 +234,7 @@ pub(crate) fn lockbookdata() -> Graph {
         //     new.remove(lowindex);
         // }
     }
-    println!("{:?}", classify);
+    // println!("{:?}", classify);
     // Add remaining links in classify to the graph if they don't exist
     for item in classify.iter() {
         //println!("{:?}\n", item);
