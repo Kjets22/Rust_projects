@@ -2,10 +2,11 @@ mod data;
 use crate::data::LinkNode;
 use data::{data, lockbookdata, Graph};
 use eframe::egui;
+use egui::ahash::{HashMap, HashMapExt};
 use egui::epaint::Shape;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Stroke, Vec2};
 use rayon::iter::Positions;
-use std::collections::HashMap;
+// use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -242,7 +243,7 @@ impl KnowledgeGraphApp {
         // Spring and repulsion constants
         let k_spring = 0.005;
         let k_repel = 3.0;
-        let c = 0.5; // Scaling factor for movement
+        let c = 0.05; // Scaling factor for movement
         let max_movement = 100.0;
 
         // Gravity parameters
@@ -320,8 +321,45 @@ impl KnowledgeGraphApp {
                 forces[i] -= gravity_force;
             }
 
-            // Update positions based on forces
+            let mut gitter: HashMap<usize, Pos2> = HashMap::new();
             let mut new_positions = positions.clone();
+            let mut count = -1;
+            // // Attempt to stop gittering of nodes
+            // if previous_postions.len() == 100 {
+            //     if _n > 100000 {
+            //         for i in 0..new_positions.len() {
+            //             let mut sum = Pos2::new(0.0, 0.0);
+            //             let mut start = &previous_postions[1][i];
+            //             let mut last = &previous_postions[1][i];
+            //             for nodes_last in &previous_postions {
+            //                 sum += (nodes_last[i] - *last);
+            //                 if !(nodes_last[i] == *last) {
+            //                     last = &nodes_last[i];
+            //                 }
+            //             }
+            //             println!("{:?} is the value {:?}", graph[i].title, sum);
+            //             let var = 0.5;
+            //             if -var <= sum.x && sum.x <= var || -var <= sum.y && sum.y <= var {
+            //                 gitter.insert(i, sum);
+            //                 count += 1;
+            //                 println!(
+            //                     "{:?} innnnn side the no move zonnne {:?}",
+            //                     graph[i].title, sum
+            //                 );
+            //             }
+            //             // if sum.is_less_then(Pos2::new(1.0, 1.0)) {}
+            //         }
+            //         // println!("{:?}", previous_postions[4].len());
+            //         // for id in gitter {
+            //         //     let id=id.0;
+            //         //     new_positions[id] = previous_postions[4][id];
+            //         // }
+            //     }
+
+            //     previous_postions.pop_front();
+            //     // break;
+            // }
+            // Update positions based on forces
             for i in 0..graph.len() {
                 let force_magnitude = forces[i].length();
 
@@ -330,7 +368,9 @@ impl KnowledgeGraphApp {
                 } else {
                     forces[i]
                 };
-
+                if gitter.contains_key(&i) {
+                    new_positions[i] += movement * c;
+                }
                 new_positions[i] += movement * c;
             }
 
@@ -364,40 +404,6 @@ impl KnowledgeGraphApp {
             // }
 
             // Write updated positions back to thread_positions
-            let mut gitter: Vec<usize> = Vec::new();
-            let mut count = -1;
-            // Attempt to stop gittering of nodes
-            if previous_postions.len() == 5 {
-                for i in 0..new_positions.len() {
-                    let mut sum = Pos2::new(0.0, 0.0);
-                    let mut start = &previous_postions[1][i];
-                    let mut last = &previous_postions[1][i];
-                    for nodes_last in &previous_postions {
-                        sum += (nodes_last[i] - *last);
-                        if !(nodes_last[i] == *last) {
-                            last = &nodes_last[i];
-                        }
-                    }
-                    println!("{:?} is the value {:?}", graph[i].title, sum);
-                    let var = 0.0;
-                    if -var <= sum.x && sum.x <= var && -var <= sum.y && sum.y <= var {
-                        gitter.push(i);
-                        count += 1;
-                        println!(
-                            "{:?} innnnn side the no move zonnne {:?}",
-                            graph[i].title, sum
-                        );
-                    }
-                    // if sum.is_less_then(Pos2::new(1.0, 1.0)) {}
-                }
-                println!("{:?}", previous_postions[4].len());
-                for id in gitter {
-                    new_positions[id] = previous_postions[4][id];
-                }
-
-                previous_postions.pop_front();
-                // break;
-            }
 
             let clone_positions = positions.clone();
             previous_postions.push_back(clone_positions);
@@ -799,7 +805,7 @@ impl eframe::App for KnowledgeGraphApp {
                 let postions = self.positions.clone();
                 let graph = self.graph.clone();
                 thread::spawn(move || {
-                    Self::apply_spring_layout(postioninfo, &graph, false, 250000);
+                    Self::apply_spring_layout(postioninfo, &graph, false, 2500000);
                 });
                 println!("ok done");
                 // while !is_finished.load(Ordering::SeqCst) {
