@@ -4,7 +4,9 @@ use data::{data, lockbookdata, Graph};
 use eframe::egui;
 use egui::epaint::Shape;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Stroke, Vec2};
+use rayon::iter::Positions;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time;
@@ -232,6 +234,7 @@ impl KnowledgeGraphApp {
         animation: bool,
         max_iterations: usize,
     ) {
+        let mut previous_postions: VecDeque<Vec<Pos2>> = VecDeque::new();
         let width = 700.0;
         let height = 500.0;
         let num_nodes = graph.len() as f32;
@@ -245,6 +248,7 @@ impl KnowledgeGraphApp {
         // Gravity parameters
         let gravity_strength = 0.0001; // Adjust as needed
         let center = Pos2::new(width / 2.0, height / 2.0);
+        // let mut positions1: Vec<Pos2> = Vec::new();
 
         for _n in 0..max_iterations {
             let cell_size = (width * height / num_nodes).sqrt();
@@ -360,6 +364,43 @@ impl KnowledgeGraphApp {
             // }
 
             // Write updated positions back to thread_positions
+            let mut gitter: Vec<usize> = Vec::new();
+            let mut count = -1;
+            // Attempt to stop gittering of nodes
+            if previous_postions.len() == 5 {
+                for i in 0..new_positions.len() {
+                    let mut sum = Pos2::new(0.0, 0.0);
+                    let mut start = &previous_postions[1][i];
+                    let mut last = &previous_postions[1][i];
+                    for nodes_last in &previous_postions {
+                        sum += (nodes_last[i] - *last);
+                        if !(nodes_last[i] == *last) {
+                            last = &nodes_last[i];
+                        }
+                    }
+                    println!("{:?} is the value {:?}", graph[i].title, sum);
+                    if -0.0 <= sum.x && sum.x <= 0.0 && -0.0 <= sum.y && sum.y <= 0.0 {
+                        gitter.push(i);
+                        count += 1;
+                        println!(
+                            "{:?} innnnn side the no move zonnne {:?}",
+                            graph[i].title, sum
+                        );
+                    }
+                    // if sum.is_less_then(Pos2::new(1.0, 1.0)) {}
+                }
+                println!("{:?}", previous_postions[4].len());
+                for id in gitter {
+                    new_positions[id] = previous_postions[4][id];
+                }
+
+                previous_postions.pop_front();
+                // break;
+            }
+
+            let clone_positions = positions.clone();
+            previous_postions.push_back(clone_positions);
+
             {
                 let mut pos_lock = thread_positions.write().unwrap();
                 *pos_lock = new_positions.clone();
@@ -381,6 +422,9 @@ impl KnowledgeGraphApp {
                 );
                 break;
             }
+            // if (_n == 10) {
+            //     break;
+            // }
 
             println!("Current Iteration: {}", _n);
             grid.clear();
