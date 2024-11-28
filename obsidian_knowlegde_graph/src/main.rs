@@ -379,7 +379,8 @@ impl KnowledgeGraphApp {
                         }
                     }
                     println!("{:?} is the value {:?}", graph[i].title, sum);
-                    if -0.0 <= sum.x && sum.x <= 0.0 && -0.0 <= sum.y && sum.y <= 0.0 {
+                    let var = 0.0;
+                    if -var <= sum.x && sum.x <= var && -var <= sum.y && sum.y <= var {
                         gitter.push(i);
                         count += 1;
                         println!(
